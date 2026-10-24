@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#132238">
+  <title>PaperQuest · 论文副本</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="topbar"></div>
+  <main id="screen" aria-live="polite">
+    <div class="boot">正在打开案件档案…</div>
+  </main>
+  <div id="drawer-root"></div>
+  <div id="modal-root"></div>
+  <div id="toast-root" aria-live="polite"></div>
+
+  <input id="file-input" type="file" accept=".pdf,.txt,.md" hidden>
+  <div id="drop-overlay" class="drop-overlay" aria-hidden="true">
+    <div class="drop-inner">
+      <div class="drop-mark">PDF</div>
+      <h2>松手，开始拆论文</h2>
+      <p>支持 PDF / TXT / Markdown，25 MB 以内</p>
+    </div>
+  </div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

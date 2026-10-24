@@ -1,0 +1,137 @@
+{
+  "schema_version": "1.0",
+  "levels": [
+    {
+      "id": "gap",
+      "type": "single_choice",
+      "kicker": "LEVEL 01",
+      "title": "缺口定位",
+      "skill": "问题定位",
+      "points": 25,
+      "objective": "从引言中识别论文真正要填补的研究缺口",
+      "prompt": "根据论文引言，SparseDrop 主要试图填补哪个研究缺口？",
+      "source_section": "1 Introduction",
+      "source_quote": "Existing regularization methods operate at the element level and do not explicitly remove span-level redundancy; it remains unclear whether structured masking helps when labeled data are scarce.",
+      "options": [
+        "预训练语言模型参数量过大，难以在边缘设备部署。",
+        "现有正则化方法只在元素级丢弃，未显式处理跨度级冗余；低资源场景下结构化掩码是否有效仍不清楚。",
+        "低资源文本分类缺少统一的标注规范。",
+        "注意力机制无法建模长距离依赖。"
+      ],
+      "answer_index": 1,
+      "explanation": "论文的缺口不是“模型太大”或“缺少标注规范”，而是现有 dropout 变体都在元素级独立丢弃，无法显式移除连续的短语级线索。作者进一步指出，结构化掩码在低资源分类微调中的作用尚不清楚。",
+      "hint": "注意引言中“element level”与“span-level redundancy”的对比。"
+    },
+    {
+      "id": "method",
+      "type": "assembly",
+      "kicker": "LEVEL 02",
+      "title": "实验装配",
+      "skill": "方法拆解",
+      "points": 25,
+      "objective": "从实验设置中还原模型、数据、正则化组合与评价指标",
+      "prompt": "假设你要复现这篇论文的核心实验，请从下面四类卡片中各选一张，装配出正确的实验配置。",
+      "source_section": "3 Method / 4 Experimental Setup",
+      "source_quote": "SparseDrop applies two complementary masking operators at each training step: attention-head masking with probability p_h = 0.1 and contiguous span masking with probability p_s = 0.15, where span lengths are drawn uniformly from {2, 3, 4, 5}.",
+      "categories": [
+        {
+          "name": "主干模型",
+          "options": [
+            "ResNet-50",
+            "BiLSTM",
+            "BERT-base",
+            "GPT-2"
+          ],
+          "answer_index": 2
+        },
+        {
+          "name": "评测数据",
+          "options": [
+            "ImageNet / CIFAR-10",
+            "SQuAD / MNLI",
+            "WMT14 En-De",
+            "SST-2 / AG News / TREC"
+          ],
+          "answer_index": 3
+        },
+        {
+          "name": "正则化组合",
+          "options": [
+            "仅权重衰减",
+            "注意力头掩码 + 连续跨度掩码",
+            "仅标签平滑",
+            "随机删除网络层"
+          ],
+          "answer_index": 1
+        },
+        {
+          "name": "核心指标",
+          "options": [
+            "BLEU",
+            "mAP",
+            "宏平均 F1",
+            "困惑度"
+          ],
+          "answer_index": 2
+        }
+      ],
+      "explanation": "论文在 BERT-base 上微调，使用 SST-2、AG News、TREC 三个英文分类数据集，核心正则化组合是注意力头掩码与连续跨度掩码，主指标是宏平均 F1。ResNet、BLEU、mAP 等配置与本文任务不匹配。",
+      "hint": "先确认任务类型：这是文本分类，不是图像分类、问答或机器翻译。"
+    },
+    {
+      "id": "result",
+      "type": "single_choice",
+      "kicker": "LEVEL 03",
+      "title": "结果侦探",
+      "skill": "数据判读",
+      "points": 25,
+      "objective": "区分论文真实报告的结果与过度解读",
+      "prompt": "根据论文报告的结果，以下哪项结论有证据支持？",
+      "source_section": "5.1 Main Results",
+      "source_quote": "The gains are largest at 100 and 500 examples and shrink to about 0.6 points when the full training set is used.",
+      "options": [
+        "SparseDrop 在所有数据规模下都能稳定提升 4 个点以上。",
+        "头掩码单独使用即可解释大部分性能提升。",
+        "训练数据越少，SparseDrop 相对标准 dropout 的增益越明显；全量数据下增益缩小到约 0.6 个点。",
+        "SparseDrop 会将推理时间增加约 3%。"
+      ],
+      "answer_index": 2,
+      "explanation": "论文明确报告增益在 100 和 500 条样本时最大，全量数据时缩小到约 0.6 个点；因此“所有规模都提升 4 个点以上”是过度解读。消融显示跨度掩码才是主要来源，头掩码单独仅提升 0.7 个点；推理没有额外开销，低于 3% 的是训练开销。",
+      "hint": "回到 5.1 与 5.2，分别核对“数据规模趋势”和“消融结果”。"
+    },
+    {
+      "id": "review",
+      "type": "review",
+      "kicker": "LEVEL 04",
+      "title": "审稿对线",
+      "skill": "批判评价",
+      "points": 25,
+      "objective": "基于论文证据提出有效审稿意见，并在作者回应后继续追问",
+      "prompt": "作为审稿人，以下哪条意见最站得住脚、最能用论文自身内容支持？",
+      "source_section": "6 Discussion and Limitations",
+      "source_quote": "First, all experiments use BERT-base and English classification datasets; we do not test larger models, other languages, or structured prediction tasks such as named entity recognition and syntactic parsing.",
+      "options": [
+        "论文只在 BERT-base 和英文分类任务上验证，外部效度有限；需要讨论方法对结构化预测或其他语言的适用性。",
+        "论文没有引用足够多的 2024 年文献，因此创新性不足。",
+        "宏平均 F1 不是文本分类的常用指标，结果不可信。",
+        "训练开销低于 3% 与我的经验不符，作者可能造假。"
+      ],
+      "answer_index": 0,
+      "explanation": "最有效的审稿意见应当指向作者自己承认、且会影响结论外推的边界。论文明确承认只测试了 BERT-base 与英文分类，未覆盖结构化预测和其他语言；这是可验证的外部效度问题。其余选项要么与论文内容无关，要么缺乏证据。",
+      "hint": "好的审稿意见不是“挑刺”，而是指出结论能外推到哪里、不能外推到哪里的证据边界。",
+      "followup": {
+        "author_response": "我们同意外部效度是限制。三个数据集覆盖了二分类、四分类和六分类，且 SparseDrop 不依赖特定架构。我们已在补充材料中加入 RoBERTa 与中文 TREC 的初步结果，但结构化预测任务确实尚未验证。",
+        "prompt": "作者这样回应后，哪一种追问最专业？",
+        "source_quote": "Fourth, span masking may remove short phrases that are genuinely label-bearing, which could hurt tasks where local cues are essential.",
+        "options": [
+          "既然补了实验，原意见完全不成立，论文应直接接收。",
+          "只要换用更大的模型，方法就一定有效。",
+          "补充实验缓解了部分担忧，但仍需说明跨度掩码在命名实体识别、句法分析等结构化预测任务上的潜在风险，并给出失败案例分析。",
+          "作者应该删除局限性一节，以免削弱论文贡献。"
+        ],
+        "answer_index": 2,
+        "explanation": "作者补充了 RoBERTa 和中文数据，说明部分外部效度担忧已被回应；但结构化预测仍未验证，而且跨度掩码可能删除真正携带标签的短语。专业的追问应当承认已解决的部分，同时把未验证的风险具体化，要求失败案例分析，而不是直接接收或泛泛要求更大模型。"
+      }
+    }
+  ]
+}

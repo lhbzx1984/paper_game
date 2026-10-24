@@ -1,0 +1,125 @@
+{
+  "schema_version": "1.0",
+  "paper": {
+    "title": "SparseDrop: Structured Dropout for Low-Resource Text Classification",
+    "authors": "Alicia Chen, Marco Rivera, Lina Wang",
+    "year": "2024",
+    "venue": "arXiv preprint",
+    "paper_type": "实证研究 / 文本分类",
+    "one_sentence_summary": "SparseDrop 在微调时同时遮蔽注意力头和连续词跨度，在低资源文本分类中提升宏平均 F1，且不改变模型架构、不增加推理成本。",
+    "research_question": "在标注数据稀缺时，结构化的跨度级 dropout 能否在不改变模型架构的前提下提升文本分类性能？",
+    "gap": "现有 dropout 多在元素级独立丢弃，没有显式消除跨度级冗余；span masking 主要用于预训练或生成任务，尚不清楚它对低资源分类微调是否有效。",
+    "method": {
+      "summary": "在 BERT-base 微调阶段，以 p_h = 0.1 随机遮蔽整个注意力头，并以 p_s = 0.15 遮蔽长度 2–5 的连续词跨度；推理时不加掩码。",
+      "key_components": [
+        "注意力头掩码（p_h = 0.1）",
+        "连续词跨度掩码（p_s = 0.15，长度 2–5）",
+        "BERT-base 微调，无架构改动",
+        "推理阶段不施加掩码"
+      ],
+      "dataset": "SST-2、AG News、TREC 的 100 / 500 / 2000 条低资源子集及全量训练集",
+      "baselines": [
+        "标准 dropout",
+        "word dropout",
+        "仅注意力头掩码",
+        "仅跨度掩码"
+      ],
+      "metrics": [
+        "宏平均 F1（主指标）",
+        "准确率（附录）"
+      ]
+    },
+    "claims": [
+      {
+        "id": "C1",
+        "text": "SparseDrop 在三个低资源基准上比标准 dropout 提升 2.4–4.1 个宏平均 F1 点。",
+        "evidence_quote": "Across three low-resource benchmarks, SparseDrop improves macro-F1 by 2.4 to 4.1 points over standard dropout, with the largest gains when training data are under 500 examples.",
+        "section": "Abstract",
+        "support": "strong",
+        "verified": true
+      },
+      {
+        "id": "C2",
+        "text": "数据越少，增益越明显；在全量训练集上，增益缩小到约 0.6 个点。",
+        "evidence_quote": "The gains are largest at 100 and 500 examples and shrink to about 0.6 points when the full training set is used.",
+        "section": "5.1 Main Results",
+        "support": "strong",
+        "verified": true
+      },
+      {
+        "id": "C3",
+        "text": "跨度掩码是主要增益来源，头掩码单独作用有限。",
+        "evidence_quote": "At 500 training examples, span masking alone improves average macro-F1 by 2.8 points, whereas head masking alone improves it by 0.7 points; combining both yields a 3.8-point gain.",
+        "section": "5.2 Ablation",
+        "support": "strong",
+        "verified": true
+      },
+      {
+        "id": "C4",
+        "text": "方法不改变架构，推理没有额外开销，训练开销低于 3%。",
+        "evidence_quote": "SparseDrop adds less than 3% training overhead and requires no architecture changes or inference cost.",
+        "section": "Abstract",
+        "support": "strong",
+        "verified": true
+      }
+    ],
+    "results": [
+      {
+        "finding": "SST-2 上的增益：100 / 500 / 2000 / 全量分别为 3.7 / 3.7 / 2.3 / 0.6 个点。",
+        "evidence_quote": "On SST-2, the gain is 3.7 points at 100 examples and 3.7 points at 500 examples; at 2000 examples the gain is 2.3 points, and at full data it is 0.6 points.",
+        "section": "5.1 Main Results",
+        "verified": true
+      },
+      {
+        "finding": "AG News 与 TREC 也呈现相同趋势：数据越少，增益越大。",
+        "evidence_quote": "On AG News, the corresponding gains are 3.4, 3.6, 2.0, and 0.5 points. On TREC, the gains are 4.1, 4.1, 2.7, and 0.6 points.",
+        "section": "5.1 Main Results",
+        "verified": true
+      },
+      {
+        "finding": "500 条样本时，跨度掩码单独提升 2.8 点，头掩码单独仅提升 0.7 点。",
+        "evidence_quote": "At 500 training examples, span masking alone improves average macro-F1 by 2.8 points, whereas head masking alone improves it by 0.7 points; combining both yields a 3.8-point gain.",
+        "section": "5.2 Ablation",
+        "verified": true
+      }
+    ],
+    "limitations": [
+      "只在 BERT-base 和英文分类任务上验证，未测试更大模型、其他语言和结构化预测。",
+      "没有理论分析解释跨度掩码为何有效，机制解释仍是假设。",
+      "数据量增大后增益递减，全量数据上几乎没有收益。",
+      "跨度掩码可能删掉真正携带标签信息的短语，对依赖局部线索的任务有风险。",
+      "掩码概率在所有数据集上固定，未探索自适应调度。"
+    ],
+    "glossary": [
+      {
+        "term": "Dropout",
+        "definition": "训练时随机将一部分激活置零，迫使模型不过度依赖单个单元。"
+      },
+      {
+        "term": "Attention head",
+        "definition": "Transformer 中一组并行的注意力计算单元，可关注不同的表示子空间。"
+      },
+      {
+        "term": "Span masking",
+        "definition": "连续遮蔽一段词序列，而不是孤立地丢弃单个词。"
+      },
+      {
+        "term": "Macro-F1",
+        "definition": "先分别计算每个类别的 F1，再取平均；适合类别不均衡的评估。"
+      },
+      {
+        "term": "Ablation",
+        "definition": "通过移除或替换模型组件，判断该组件对结果的贡献。"
+      },
+      {
+        "term": "Low-resource",
+        "definition": "标注数据量很少的场景，模型更容易过拟合。"
+      }
+    ],
+    "gameability": {
+      "score": 0.92,
+      "notes": "结构完整，包含明确缺口、方法配置、定量结果、消融与局限，适合生成四关。"
+    },
+    "estimated_minutes": 18
+  }
+}

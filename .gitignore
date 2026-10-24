@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/paperquest.db
+data/paperquest.db-shm
+data/paperquest.db-wal

@@ -1,0 +1,90 @@
+SparseDrop: Structured Dropout for Low-Resource Text Classification
+
+Alicia Chen, Marco Rivera, Lina Wang
+Institute for Language Technology
+
+Abstract
+
+Neural text classifiers degrade sharply when labeled data are scarce. We introduce SparseDrop, a structured dropout method that randomly masks entire attention heads and contiguous token spans during fine-tuning. Across three low-resource benchmarks, SparseDrop improves macro-F1 by 2.4 to 4.1 points over standard dropout, with the largest gains when training data are under 500 examples. Ablations show that span masking, rather than head masking alone, drives most of the improvement. SparseDrop adds less than 3% training overhead and requires no architecture changes or inference cost.
+
+1 Introduction
+
+Text classification is a core building block of many language systems, including sentiment analysis, topic tagging, and question routing. Modern pretrained language models achieve strong accuracy when thousands of labeled examples are available. In many real applications, however, only a few hundred labeled examples can be collected, and models fine-tuned on such small datasets tend to memorize superficial phrase patterns rather than learn robust decision rules.
+
+Dropout is a standard remedy for overfitting. It randomly zeroes individual activations during training, forcing the network to avoid relying on any single unit. Variants such as word dropout and attention-head dropout extend this idea to tokens and heads. These methods are simple and widely used, but they share a limitation: each masking decision is local and independent. They can remove an individual token or head, yet they do not explicitly remove a contiguous span of text that carries a redundant phrase-level cue. When labeled data are scarce, such spans can provide a shortcut that the classifier overfits to.
+
+We ask whether structured, span-level masking can improve low-resource text classification without changing the model architecture. Existing regularization methods operate at the element level and do not explicitly remove span-level redundancy; it remains unclear whether structured masking helps when labeled data are scarce. We propose SparseDrop, a training-time regularization method that combines attention-head masking with contiguous token-span masking. SparseDrop is applied only during fine-tuning and adds no parameters or inference operations.
+
+Our contributions are threefold. First, we introduce SparseDrop, a simple structured dropout method that masks both attention heads and contiguous token spans. Second, we evaluate it on three text-classification benchmarks under four data regimes, from 100 to the full training set. Third, we isolate the effect of each masking operator through ablations and show that span masking accounts for most of the gain. We also report training overhead and negative results at full data scale.
+
+2 Related Work
+
+Dropout was introduced as a way to regularize deep neural networks by randomly dropping units during training. Word dropout removes individual input tokens, and attention-head dropout removes entire attention heads in Transformer models. Span corruption is widely used in pretraining objectives such as BART and SpanBERT, where contiguous spans are masked or replaced. These methods demonstrate that span-level perturbations can shape what a model learns, but they are typically used for pretraining or generation rather than for low-resource classification fine-tuning.
+
+Data augmentation and adversarial training are alternative ways to improve low-resource robustness. They can be effective, but often require additional computation or carefully designed augmentation policies. SparseDrop differs in that it is applied inside the standard fine-tuning loop, requires no extra data, and introduces no inference cost.
+
+3 Method
+
+3.1 Background
+
+We fine-tune BERT-base on a downstream classification task. Given an input sequence of tokens, the model produces a contextual representation that is passed to a linear classification head. Training minimizes the cross-entropy loss with AdamW. Standard dropout is applied to hidden activations and attention weights.
+
+3.2 SparseDrop
+
+SparseDrop applies two complementary masking operators at each training step: attention-head masking with probability p_h = 0.1 and contiguous span masking with probability p_s = 0.15, where span lengths are drawn uniformly from {2, 3, 4, 5}. Head masking sets the output of a sampled attention head to zero for the current forward pass. Span masking selects start positions uniformly at random and zeros the token embeddings in each selected span; the attention mask is left unchanged so that positional information is preserved. The two operators are sampled independently and can be active in the same step.
+
+At inference time, no masking is applied. SparseDrop therefore adds no parameters, no inference operations, and no changes to the model architecture. The only additional cost is the sampling and embedding-zeroing work during training.
+
+3.3 Training Details
+
+We use BERT-base-uncased with a linear classification head. Models are trained for up to 10 epochs with a batch size of 32 and a learning rate of 2e-5. We use early stopping on the development set based on macro-F1. Each configuration is run with five random seeds, and we report the mean and standard deviation. All experiments run on a single V100 GPU.
+
+4 Experimental Setup
+
+4.1 Datasets
+
+We evaluate on three English text-classification datasets. SST-2 is a binary sentiment classification dataset. AG News is a four-class topic classification dataset. TREC is a six-class question classification dataset. For each dataset, we create low-resource training subsets with 100, 500, and 2000 examples, sampled in a stratified way. We also report results on the full training set. Development and test sets follow the standard splits.
+
+4.2 Baselines
+
+We compare SparseDrop with four baselines: standard dropout, word dropout, attention-head masking only, and span masking only. All methods use the same backbone, optimizer, and early-stopping protocol. For the masking-only variants, we set the corresponding probability to the same value used in SparseDrop.
+
+4.3 Metrics
+
+We report macro-F1 as the primary metric because it gives equal weight to each class, which is important when class distributions are uneven. We also report accuracy in the appendix. Results are averaged over five seeds.
+
+5 Results
+
+5.1 Main Results
+
+Across three low-resource benchmarks, SparseDrop improves macro-F1 by 2.4 to 4.1 points over standard dropout, with the largest gains when training data are under 500 examples. On SST-2, the gain is 3.7 points at 100 examples and 3.7 points at 500 examples; at 2000 examples the gain is 2.3 points, and at full data it is 0.6 points. On AG News, the corresponding gains are 3.4, 3.6, 2.0, and 0.5 points. On TREC, the gains are 4.1, 4.1, 2.7, and 0.6 points. The gains are largest at 100 and 500 examples and shrink to about 0.6 points when the full training set is used.
+
+5.2 Ablation
+
+At 500 training examples, span masking alone improves average macro-F1 by 2.8 points, whereas head masking alone improves it by 0.7 points; combining both yields a 3.8-point gain. This pattern holds across the three datasets. The result suggests that removing contiguous spans is the main driver, while head masking provides a smaller complementary benefit.
+
+5.3 Overhead and Significance
+
+SparseDrop adds less than 3% training overhead and requires no architecture changes or inference cost. The overhead comes from span sampling and embedding-zeroing operations. We use a paired t-test to compare SparseDrop with standard dropout across seeds. The improvement is significant at 100 and 500 examples (p < 0.05). At 2000 examples the improvement is smaller and not consistently significant across datasets, and at full data it is not significant.
+
+6 Discussion and Limitations
+
+Why does span masking help? One explanation is that masking a contiguous span removes a coherent phrase-level cue, forcing the model to rely on distributed context from the remaining tokens. Head masking alone removes a single attention pathway, but other heads can still attend to the same phrase, so the shortcut remains available. This account is consistent with the ablation results, although we do not test it directly.
+
+The method has several limitations. First, all experiments use BERT-base and English classification datasets; we do not test larger models, other languages, or structured prediction tasks such as named entity recognition and syntactic parsing. Second, we do not provide a theoretical analysis of why span masking helps. Third, the gains diminish as labeled data increase, and the method offers little benefit in the full-data regime. Fourth, span masking may remove short phrases that are genuinely label-bearing, which could hurt tasks where local cues are essential. Finally, the masking probabilities are fixed across datasets; adaptive schedules may improve results but remain unexplored.
+
+7 Conclusion
+
+We presented SparseDrop, a structured dropout method for low-resource text classification. By masking contiguous spans and attention heads during fine-tuning, SparseDrop improves macro-F1 in data-scarce regimes without changing the architecture or adding inference cost. Ablations show that span masking drives most of the gain. Future work should test the method on structured prediction, other languages, and larger pretrained models.
+
+References
+
+Chen, A., Rivera, M., and Wang, L. Structured regularization for small-data NLP. Journal of Language Technology, 2023.
+
+Devlin, J., Chang, M.-W., Lee, K., and Toutanova, K. BERT: Pre-training of deep bidirectional transformers for language understanding. NAACL, 2019.
+
+Levine, S., et al. Span masking for robust text representation. Transactions on Machine Learning, 2022.
+
+Smith, R., and Patel, N. Low-resource text classification: A survey. Computational Linguistics, 2021.
+
+Zhang, Y., et al. Dropout variants for transformer fine-tuning. EMNLP, 2020.
