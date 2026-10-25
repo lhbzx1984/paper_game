@@ -5,3 +5,4 @@ __pycache__/
 data/paperquest.db
 data/paperquest.db-shm
 data/paperquest.db-wal
+server.log

@@ -39,6 +39,8 @@ const state = {
   deleteTarget: null,
   loadTarget: null,
   progressSaveErrorShown: false,
+  story: null,
+  storyClueId: null,
 };
 
 let processingTimer = null;
@@ -249,6 +251,7 @@ function initializeLevelState(level) {
   if (level.type === "review") {
     return {
       hintUsed: false,
+      hintFree: false,
       mainSelected: null,
       mainWrong: [],
       mainAttempts: 0,
@@ -265,6 +268,7 @@ function initializeLevelState(level) {
     const categories = Array.isArray(level.categories) ? level.categories : [];
     return {
       hintUsed: false,
+      hintFree: false,
       selected: categories.map(() => null),
       attempts: 0,
       resolved: false,
@@ -273,6 +277,7 @@ function initializeLevelState(level) {
   }
   return {
     hintUsed: false,
+    hintFree: false,
     selected: null,
     wrong: [],
     attempts: 0,
@@ -305,7 +310,7 @@ function levelScore(level, levelState) {
   } else if (levelState.resolved) {
     points = scoreForQuality(25, levelState.quality);
   }
-  if (points > 0 && levelState.hintUsed) points = Math.max(0, points - 3);
+  if (points > 0 && levelState.hintUsed && !levelState.hintFree) points = Math.max(0, points - 3);
   return points;
 }
 
@@ -384,18 +389,18 @@ function renderTopbar() {
 function modeNoteHtml() {
   if (!state.status) {
     if (state.statusError) {
-      return `本地服务状态读取失败：${escapeHtml(truncate(state.statusError, 120))}。仍可试玩示例，或检查 Flask 服务。`;
+      return `本地服务状态读取失败：${escapeHtml(truncate(state.statusError, 120))}。仍可上传论文，或检查 Flask 服务。`;
     }
     return "正在读取本地模型状态…";
   }
   if (state.status.mock) {
-    return "当前是<strong>模拟模式</strong>：可以完整体验流程，上传论文时会返回示例案件；配置真实模型后才会解析你的论文。";
+    return "当前是<strong>模拟模式</strong>：上传任意论文都会载入示例案件，用于体验四幕调查；配置真实模型后才会解析你的论文。";
   }
   if (state.status.real_configured) {
     const host = state.status.host || "云端模型";
     return `已连接 <strong>${escapeHtml(host)}</strong> · ${escapeHtml(state.status.model || "模型")}。上传论文后会调用该接口解析。`;
   }
-  return "尚未配置云端模型：可以先试玩示例，或点击右上角「模型设置」填写 API 后上传论文。";
+  return "尚未配置云端模型：请先点击右上角「模型设置」填写 API，再上传论文；模拟模式下可直接上传体验示例。";
 }
 
 function homeHtml() {
@@ -406,67 +411,58 @@ function homeHtml() {
     <div class="home">
       <section class="hero">
         <div class="hero-copy">
-          <div class="eyebrow"><span class="eyebrow-line"></span>PAPER → PLAY</div>
-          <h1>把论文，<br>读成一场<em>调查</em>。</h1>
-          <p class="lede">上传一篇英文 AI/ML 实证论文。先建立案件档案，再把研究缺口、实验配置、结果判读与审稿边界变成四关。你不是在背摘要，而是在证据之间做判断。</p>
+          <div class="eyebrow"><span class="eyebrow-line"></span>PAPER → CASE → PLAY</div>
+          <h1>把论文，<br>读成一场<em>雨夜调查</em>。</h1>
+          <p class="lede">上传论文后，你会以第一人称进入四幕案发现场：在档案馆找研究缺口，在实验台核对方法，在数据室追证据，在审稿密室确认边界。四幕结束，才是 100 分制结案考核。</p>
           <div class="hero-actions">
             <button class="btn btn-accent" data-action="upload">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M12 16V4m0 0L7 9m5-5 5 5"></path>
                 <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"></path>
               </svg>
-              上传论文，建立案件
+              上传论文，进入案发现场
             </button>
-            <button class="btn btn-ghost" data-action="demo">
-              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M8 5.5v13l11-6.5-11-6.5Z"></path>
-              </svg>
-              试玩示例案件
-            </button>
+            <button class="btn btn-ghost" data-action="open-library">打开资料库</button>
           </div>
-          <div class="format-note">PDF / TXT / Markdown · 25 MB 以内${activeCase}</div>
+          <div class="format-note">PDF / TXT / Markdown · 25 MB 以内 · 必须先上传论文${activeCase}</div>
           <p class="mode-note">${modeNoteHtml()}</p>
         </div>
 
         <div class="hero-art" aria-hidden="true">
-          <div class="case-card">
-            <div class="case-top"><span>CASE FILE · PQ-204</span><span class="stamp">待调查</span></div>
-            <div class="paper-sheet">
-              <div class="paper-pin"></div>
-              <div class="paper-title">SparseDrop: Structured Dropout for Low-Resource Text Classification</div>
-              <div class="paper-lines"><span></span><span></span><span></span><span></span><span></span><span></span></div>
-              <div class="paper-tags"><span>AI / ML</span><span>实证研究</span><span>低资源分类</span></div>
-            </div>
-            <div class="case-bottom"><span>4 CHAPTERS</span><span>18 MIN</span></div>
+          <div class="hero-photo">
+            <img src="/static/assets/art/cover.jpg" alt="雨夜中的学院档案馆" loading="eager">
+            <div class="hero-photo-shade"></div>
+            <div class="hero-case-chip"><span>CASE FILE</span><strong>PQ-204</strong></div>
+            <div class="hero-photo-caption"><span>23:47</span>雨还在下。有人翻过那篇论文的卷宗。</div>
           </div>
-          <div class="floating-note note-one"><small>GAP / 研究缺口</small>元素级 dropout 无法显式移除跨度级冗余。</div>
-          <div class="floating-note note-two"><small>CHECK / 审稿边界</small>结论能外推到哪些任务，又不能外推到哪？</div>
+          <div class="floating-note note-one"><small>ACT I / 缺口</small>现有研究没解决什么？</div>
+          <div class="floating-note note-two"><small>ACT IV / 边界</small>结论能推到哪里，又不能推到哪里？</div>
         </div>
       </section>
 
       <section class="steps">
         <article class="step-card">
           <div class="step-num">01</div>
-          <h3>立案建档</h3>
-          <p>提取章节，定位研究问题、缺口、方法配置与证据边界。每条关键引文都尽量回链到原文。</p>
+          <h3>上传论文 · 立案建档</h3>
+          <p>提取章节，定位研究问题、缺口、方法配置与证据边界。没有论文，不开始游戏。</p>
         </article>
         <article class="step-card">
           <div class="step-num">02</div>
-          <h3>四关调查</h3>
-          <p>缺口定位、实验装配、结果侦探、审稿对线。一次命中拿满分，提示会扣 3 分。</p>
+          <h3>选择调查员 · 四幕现场</h3>
+          <p>雨夜档案馆、地下实验台、数据观测室、审稿人密室。点击线索，拼出证据链，再用一次推理打开下一幕。</p>
         </article>
         <article class="step-card">
           <div class="step-num">03</div>
-          <h3>结案输出</h3>
-          <p>得到 100 分制结案报告、逐关证据记录，以及一份可以带走的论文阅读大纲。</p>
+          <h3>结案审讯 · 100 分报告</h3>
+          <p>四道结案考核检验你真正读懂了多少，生成逐关证据记录、结案报告与可带走的阅读大纲。</p>
         </article>
       </section>
 
       <div class="proof-strip">
-        <div class="proof-item"><strong>4</strong>关递进调查</div>
+        <div class="proof-item"><strong>4</strong>幕第一人称现场</div>
+        <div class="proof-item"><strong>3</strong>名调查员 · 专属被动</div>
+        <div class="proof-item"><strong>4</strong>关结案考核</div>
         <div class="proof-item"><strong>100</strong>分制评分</div>
-        <div class="proof-item"><strong>12</strong>条示例引文逐字核验</div>
-        <div class="proof-item"><strong>25 MB</strong>单文件上限</div>
       </div>
     </div>
   `;
@@ -504,10 +500,22 @@ function render() {
   if (state.screen === "results" && !state.caseData) {
     state.screen = "home";
   }
+  if ((state.screen === "select" || state.screen === "story") && !state.caseData) {
+    state.screen = "home";
+  }
+  if (state.screen === "story" && !state.story?.character) {
+    state.screen = state.caseData ? "select" : "home";
+  }
+  document.body.classList.toggle(
+    "story-mode",
+    state.screen === "select" || state.screen === "story",
+  );
   const host = $("#screen");
   if (!host) return;
   let html = "";
   if (state.screen === "processing") html = processingHtml();
+  else if (state.screen === "select") html = selectHtml();
+  else if (state.screen === "story") html = storyHtml();
   else if (state.screen === "case") html = caseHtml();
   else if (state.screen === "game") html = gameHtml();
   else if (state.screen === "results") html = resultsHtml();
@@ -517,9 +525,11 @@ function render() {
 
   const key = state.screen === "game"
     ? `game:${state.currentLevel}`
-    : state.screen === "results"
-      ? "results"
-      : state.screen;
+    : state.screen === "story"
+      ? `story:${Number(state.story?.sceneIndex) || 0}`
+      : state.screen === "results"
+        ? "results"
+        : state.screen;
   if (key !== state.lastRenderKey) {
     state.lastRenderKey = key;
     window.scrollTo(0, 0);
@@ -604,6 +614,8 @@ function resetCase() {
   state.completedAt = null;
   state.savePending = false;
   state.progressSaveErrorShown = false;
+  state.story = null;
+  state.storyClueId = null;
 }
 
 function extractLevelList(payload) {
@@ -638,7 +650,9 @@ function applyCasePayload(payload, fallbackSource = "upload") {
   state.completedAt = null;
   state.savePending = false;
   state.progressSaveErrorShown = false;
-  state.screen = "case";
+  state.story = null;
+  state.storyClueId = null;
+  state.screen = "select";
   render();
   if (!state.levels.length) {
     prefetchLevels();
@@ -682,33 +696,6 @@ async function prefetchLevels(force = false) {
     showToast(`关卡生成中断：${truncate(state.levelsError, 90)}`, "bad");
   } finally {
     if (epoch === state.epoch) state.levelsPromise = null;
-  }
-}
-
-async function startDemo() {
-  const epoch = ++state.epoch;
-  state.pendingFile = null;
-  await flushProgressSave();
-  resetCase();
-  const task = apiFetch("/api/demo", {}, 30000);
-  try {
-    const data = await runProcessing(
-      {
-        title: "正在调取示例案件",
-        subtitle: "核对案件档案、原文引文与四关配置。",
-        stages: ["调取示例论文", "核对引文与证据", "布置四个调查关卡"],
-        tip: "示例案件用于演示完整流程，不会调用你的模型额度。",
-      },
-      task,
-    );
-    if (epoch !== state.epoch) return;
-    applyCasePayload(data, "demo");
-  } catch (error) {
-    if (epoch !== state.epoch) return;
-    state.processing = null;
-    state.screen = "home";
-    render();
-    throw error;
   }
 }
 
@@ -795,15 +782,28 @@ async function startGame() {
     showToast("请先上传或打开一篇论文。", "bad");
     return;
   }
+  if (!state.story?.character) {
+    state.screen = "select";
+    render();
+    return;
+  }
+  if (!state.story.finished) {
+    state.screen = "story";
+    render();
+    showToast("四幕现场调查结束后，才会进入结案审讯。", "warn");
+    return;
+  }
   if (!state.levels.length) {
     if (state.levelsPending) {
-      showToast("关卡还在生成，请稍等片刻。");
+      showToast("结案考核还在生成，请稍等片刻。");
       return;
     }
     const epoch = state.epoch;
-    showToast("正在生成四关，完成后会自动进入第一关。");
+    state.screen = "case";
+    render();
+    showToast("正在生成结案考核，完成后会自动进入第一关。");
     await prefetchLevels();
-    if (epoch !== state.epoch || state.screen !== "case" || !state.levels.length) return;
+    if (epoch !== state.epoch || !state.levels.length) return;
   }
   if (allLevelsComplete()) {
     if (!state.completedAt) {
@@ -822,7 +822,18 @@ async function startGame() {
 
 function resumeCurrent() {
   if (!state.caseData) return;
+  if (!state.story?.character) {
+    state.screen = "select";
+    render();
+    return;
+  }
+  if (!state.story.finished) {
+    state.screen = "story";
+    render();
+    return;
+  }
   if (allLevelsComplete()) {
+    state.completedAt = state.completedAt || Date.now();
     state.screen = "results";
     render();
     return;
@@ -880,6 +891,7 @@ function restoreSavedLevelState(level, saved) {
   const fresh = initializeLevelState(level);
   if (!saved || typeof saved !== "object") return fresh;
   fresh.hintUsed = saved.hintUsed === true;
+  fresh.hintFree = saved.hintFree === true;
 
   if (level.type === "review") {
     const mainCount = Array.isArray(level.options) ? level.options.length : 0;
@@ -921,6 +933,7 @@ function restoreSavedLevelState(level, saved) {
 
 function hasAnyProgress() {
   if (String(state.reflection || "").trim() || String(state.outline || "").trim()) return true;
+  if (state.story?.character) return true;
   return state.levelStates.some((levelState) => {
     if (!levelState) return false;
     return Boolean(
@@ -948,6 +961,7 @@ function serializeProgress() {
     completed: allLevelsComplete(),
     levelCount: state.levels.length,
     hintsUsed: hintCount(),
+    story: state.story,
   };
 }
 
@@ -1210,10 +1224,9 @@ function libraryHtml() {
       <div class="library-state library-empty">
         <div class="empty-stamp">NO CASES YET</div>
         <h2>资料库还是空的</h2>
-        <p>上传论文并生成四关后，在案件档案里点击「保存到资料库」。保存后，答题进度会自动同步。</p>
+        <p>上传论文并生成四幕现场后，在案件档案里点击「保存到资料库」。保存后，调查与答题进度会自动同步。</p>
         <div class="library-empty-actions">
           <button class="btn btn-accent" data-action="upload">上传论文</button>
-          <button class="btn btn-ghost" data-action="demo">先试玩示例</button>
         </div>
       </div>
     `;
@@ -1383,6 +1396,8 @@ async function loadSavedCase(id) {
   state.outline = typeof progress.outline === "string" ? progress.outline : "";
   state.startedAt = toTimestamp(progress.startedAt) || toTimestamp(payload.item?.created_at) || Date.now();
   state.completedAt = toTimestamp(progress.completedAt);
+  state.story = restoreStory(progress.story);
+  state.storyClueId = null;
   state.savePending = false;
   state.progressSaveErrorShown = false;
   state.loadTarget = null;
@@ -1391,12 +1406,14 @@ async function loadSavedCase(id) {
   if (allLevelsComplete()) {
     if (!state.completedAt) state.completedAt = Date.now();
     state.screen = "results";
-  } else if (hasAnyProgress()) {
+  } else if (state.story?.finished) {
     const next = firstIncompleteLevel();
     state.currentLevel = next >= 0 ? next : 0;
     state.screen = "game";
+  } else if (state.story?.character) {
+    state.screen = "story";
   } else {
-    state.screen = "case";
+    state.screen = "select";
   }
 
   if (payload.item) applyLibrarySummary(payload.item);
@@ -1442,16 +1459,18 @@ function caseLevelPreviewHtml() {
   const ready = state.levels.length > 0;
   const levels = ready ? state.levels : FALLBACK_LEVELS;
   const next = ready ? firstIncompleteLevel() : 0;
+  const locked = !state.story?.finished;
   return levels.map((level, index) => {
     const levelState = ready ? state.levelStates[index] : null;
     const done = ready && isLevelComplete(level, levelState);
-    const current = index === next && !allLevelsComplete();
+    const current = ready && !locked && index === next && !allLevelsComplete();
     let sub = ready ? String(level.skill || "论文理解") : "等待生成";
     if (done) sub += " · 已完成";
     else if (state.levelsPending) sub += " · 生成中";
+    else if (locked) sub = "完成四幕现场后解锁";
     return `
-      <div class="preview-item ${done ? "done" : ""} ${current ? "current" : ""}">
-        <div class="preview-num">${done ? "✓" : String(index + 1).padStart(2, "0")}</div>
+      <div class="preview-item ${done ? "done" : ""} ${current ? "current" : ""} ${locked && !done ? "locked" : ""}">
+        <div class="preview-num">${done ? "✓" : locked ? "锁" : String(index + 1).padStart(2, "0")}</div>
         <div class="preview-body">
           <div class="preview-title">${escapeHtml(level.title || `第 ${index + 1} 关`)}</div>
           <div class="preview-skill">${escapeHtml(sub)}</div>
@@ -1461,39 +1480,85 @@ function caseLevelPreviewHtml() {
   }).join("");
 }
 
-function caseCtaState() {
-  if (state.levelsPending) {
-    return {
-      title: "正在生成四关",
-      note: "模型正在把论文改写成四道题，通常还需要 30–120 秒。完成后本页会自动出现入口。",
-      label: "正在生成关卡…",
-      action: "start-game",
-      disabled: true,
-    };
+function caseStoryPreviewHtml() {
+  const acts = storyActs();
+  if (!acts.length) return "";
+  if (!state.story?.character) {
+    return `
+      <div class="story-preview-empty">
+        <p>尚未选择调查员。</p>
+        <button class="link-btn" data-action="open-select">先去选人 →</button>
+      </div>
+    `;
   }
-  if (state.levelsError) {
+  const currentIndex = Number(state.story.sceneIndex) || 0;
+  return acts.map((act, index) => {
+    const solved = storyActSolved(act);
+    const current = !solved && index === currentIndex;
+    return `
+      <div class="story-preview-item ${solved ? "done" : ""} ${current ? "current" : ""}">
+        <span class="story-preview-dot">${solved ? "✓" : String(index + 1).padStart(2, "0")}</span>
+        <div>
+          <div class="story-preview-title">${escapeHtml(act.title)}</div>
+          <div class="story-preview-sub">${escapeHtml(solved ? "推理已成立" : current ? "正在调查" : "尚未抵达")}</div>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function caseCtaState() {
+  const summary = storyProgressSummary();
+  if (!summary.started) {
     return {
-      title: "关卡生成中断",
-      note: `${truncate(state.levelsError, 140)} 点击下方按钮重试，不必重新上传论文。`,
-      label: "重试生成关卡",
-      action: "retry-generate",
+      title: "先选一位调查员",
+      note: "案件档案已建立。选定调查员后，以第一人称进入四幕现场；四幕结束才解锁结案考核。",
+      label: "选择调查员，进入现场",
+      action: "open-select",
       disabled: false,
     };
   }
-  if (!state.levels.length) {
+  if (!summary.finished) {
     return {
-      title: "准备开庭",
-      note: "案件档案已建立。点击生成四道关卡，随后开始调查。",
-      label: "生成并开始",
-      action: "start-game",
+      title: "现场调查进行中",
+      note: `已完成 ${summary.solved}/4 幕。点击继续第 ${summary.nextIndex + 1} 幕「${summary.nextTitle}」，找齐线索并解开推理锁。`,
+      label: `继续第 ${summary.nextIndex + 1} 幕 · ${summary.nextTitle}`,
+      action: "continue-story",
       disabled: false,
     };
   }
   if (allLevelsComplete()) {
     return {
       title: "案件已经结清",
-      note: "四关都已完成，可以查看分数、证据链与结案报告。",
+      note: "四幕调查与四关结案考核都已完成，可以查看分数、证据链与结案报告。",
       label: "查看结案报告",
+      action: "start-game",
+      disabled: false,
+    };
+  }
+  if (state.levelsPending) {
+    return {
+      title: "正在准备结案考核",
+      note: "模型正在把论文改写成四道审讯题，通常还需要 30–120 秒。完成后本页会自动出现入口。",
+      label: "正在生成考核…",
+      action: "start-game",
+      disabled: true,
+    };
+  }
+  if (state.levelsError) {
+    return {
+      title: "结案考核生成中断",
+      note: `${truncate(state.levelsError, 140)} 点击下方按钮重试，不必重新调查四幕现场。`,
+      label: "重试生成考核",
+      action: "retry-generate",
+      disabled: false,
+    };
+  }
+  if (!state.levels.length) {
+    return {
+      title: "可以开庭了",
+      note: "四幕现场调查已完成。生成四道结案考核，检验你对论文的真实理解。",
+      label: "生成结案考核",
       action: "start-game",
       disabled: false,
     };
@@ -1501,8 +1566,8 @@ function caseCtaState() {
   const done = completedLevelCount();
   const next = firstIncompleteLevel();
   return {
-    title: done > 0 ? "继续调查" : "可以开庭了",
-    note: "四关 × 25 分。一次命中得满分，提示扣 3 分；随时可以打开论文原文核对。",
+    title: done > 0 ? "继续结案审讯" : "开始结案审讯",
+    note: "四关 × 25 分。四幕调查不会直接计分；结案考核按一次命中、二次命中与提示使用情况计分。",
     label: done > 0 ? `继续第 ${next + 1} 关` : "进入第 1 关",
     action: "start-game",
     disabled: false,
@@ -1626,9 +1691,19 @@ function caseHtml() {
 
         <aside class="case-side">
           <section class="card">
-            <div class="card-label">INVESTIGATION / 四关</div>
-            <h2 class="side-title">调查路线</h2>
+            <div class="card-label">INVESTIGATION / 四幕现场</div>
+            <h2 class="side-title">第一人称调查</h2>
+            <div class="story-preview">${caseStoryPreviewHtml()}</div>
+            <button class="btn btn-light btn-sm side-source-btn" data-action="${state.story?.character ? "continue-story" : "open-select"}">
+              ${state.story?.character && !state.story.finished ? "继续进入现场" : state.story?.finished ? "回看现场" : "选择调查员"}
+            </button>
+          </section>
+
+          <section class="card">
+            <div class="card-label">FINAL ASSESSMENT / 结案考核</div>
+            <h2 class="side-title">四关审讯</h2>
             <div class="level-preview">${caseLevelPreviewHtml()}</div>
+            <p class="side-hint">四幕结束后解锁。四关共 100 分，提示按角色能力结算。</p>
             <button class="btn btn-light btn-sm side-source-btn" data-action="open-source" data-scope="paper">查看论文原文</button>
           </section>
 
@@ -1793,7 +1868,9 @@ function phaseFeedbackHtml(level, levelState, phase) {
   } else {
     pointsText = `+${finalLevelScore} 分`;
   }
-  const hintNote = levelState.hintUsed ? `<p class="muted">本关使用过提示，已扣除 3 分。</p>` : "";
+  const hintNote = levelState.hintUsed
+    ? `<p class="muted">${levelState.hintFree ? "本关提示由角色能力免扣分。" : "本关使用过提示，已扣除 3 分。"}</p>`
+    : "";
   return `
     <div class="feedback ${className}">
       <div class="feedback-head">
@@ -1829,10 +1906,18 @@ function nextRowHtml() {
 
 function hintAreaHtml(level, levelState) {
   const unavailable = !level.hint || levelState.hintUsed || isLevelComplete(level, levelState);
+  const character = activeCharacter();
+  let note = level.hint ? "使用提示会在本关扣 3 分" : "本关暂无提示";
+  if (levelState.hintUsed && levelState.hintFree) note = "本次提示由角色能力免扣分";
+  else if (!levelState.hintUsed && character?.id === "gu" && level.type === "review") {
+    note = "审稿人能力：本关提示不扣分";
+  } else if (!levelState.hintUsed && character?.id === "lin" && state.story?.freeHintAvailable) {
+    note = "档案员能力：本次提示不扣分（整局 1 次）";
+  }
   return `
     <div class="hint-row">
       <button class="hint-btn" data-action="use-hint" ${unavailable ? "disabled" : ""}>${levelState.hintUsed ? "提示已使用" : "需要一点提示？"}</button>
-      <span class="assembly-hint">${level.hint ? "使用提示会在本关扣 3 分" : "本关暂无提示"}</span>
+      <span class="assembly-hint">${escapeHtml(note)}</span>
     </div>
     ${levelState.hintUsed && level.hint ? `<div class="hint-box">${escapeHtml(level.hint)}</div>` : ""}
   `;
@@ -1850,14 +1935,20 @@ function choiceLevelHtml(level, levelState) {
 function assemblyLevelHtml(level, levelState) {
   const categories = Array.isArray(level.categories) ? level.categories : [];
   const allChosen = levelState.selected.every((value) => value != null);
+  const character = activeCharacter();
+  const showsRuledOut = character?.id === "shen" && !levelState.resolved;
   return `
+    ${showsRuledOut ? `<p class="passive-note"><span>沙盘推演</span>沈砾已为每一类排除一个错误选项。</p>` : ""}
     <div class="assembly">
-      ${categories.map((category, categoryIndex) => `
+      ${categories.map((category, categoryIndex) => {
+        const excluded = assemblyExcludedIndex(level, categoryIndex);
+        return `
         <div class="assembly-row">
           <div class="assembly-label">${escapeHtml(category.name || `配置 ${categoryIndex + 1}`)}</div>
           <div class="chip-options">
             ${(category.options || []).map((option, optionIndex) => {
               const chosen = levelState.selected[categoryIndex] === optionIndex;
+              const ruledOut = !levelState.resolved && optionIndex === excluded;
               let className = "chip-option";
               if (levelState.resolved) {
                 if (optionIndex === category.answer_index) className += " correct";
@@ -1865,15 +1956,16 @@ function assemblyLevelHtml(level, levelState) {
               } else if (chosen) {
                 className += " selected";
               }
+              if (ruledOut) className += " ruled-out";
               return `
-                <button class="${className}" data-action="select-assembly" data-cat="${categoryIndex}" data-opt="${optionIndex}" ${levelState.resolved ? "disabled" : ""}>
-                  ${escapeHtml(option)}
+                <button class="${className}" data-action="select-assembly" data-cat="${categoryIndex}" data-opt="${optionIndex}" ${levelState.resolved || ruledOut ? "disabled" : ""}>
+                  ${escapeHtml(option)}${ruledOut ? `<span class="ruled-badge">排除</span>` : ""}
                 </button>
               `;
             }).join("")}
           </div>
         </div>
-      `).join("")}
+      `; }).join("")}
     </div>
     ${phaseFeedbackHtml(level, levelState, "main")}
     ${levelState.resolved ? nextRowHtml() : `
@@ -1955,10 +2047,20 @@ function gameProgressHtml() {
 
 function gameSideHtml() {
   const quoteCounts = verifiedQuoteStats(state.levels);
+  const character = activeCharacter();
   return `
     <aside class="game-side">
       <section class="map-card">
-        <div class="card-label">INVESTIGATION MAP</div>
+        ${character ? `
+          <div class="game-character">
+            <span class="game-character-avatar" style="background-image:url('${escapeHtml(character.portrait)}')"></span>
+            <span class="game-character-copy">
+              <strong>${escapeHtml(character.name)} · ${escapeHtml(character.role)}</strong>
+              <small>${escapeHtml(character.passive)}：${escapeHtml(character.passiveShort)}</small>
+            </span>
+          </div>
+        ` : ""}
+        <div class="card-label">FINAL ASSESSMENT · 结案审讯</div>
         <div class="map-card-body">
           ${state.levels.map((level, index) => {
             const done = isLevelComplete(level, state.levelStates[index]);
@@ -1966,8 +2068,8 @@ function gameSideHtml() {
             const sub = done
               ? `已完成 · ${levelScore(level, state.levelStates[index])}/25`
               : active
-                ? "正在调查"
-                : "待解锁";
+                ? "正在受审"
+                : "待审";
             return `
               <div class="map-node ${done ? "done" : ""} ${active ? "active" : ""}">
                 <span class="map-dot"></span>
@@ -2004,8 +2106,15 @@ function gameHtml() {
   return `
     <div class="game-shell">
       <button class="back-link" data-action="back-to-case">← 案件档案</button>
+      <div class="game-banner">
+        <div class="game-banner-text">
+          <span class="game-banner-kicker">FINAL ASSESSMENT · 结案审讯</span>
+          <strong>四幕调查已经结束。现在，用四道题证明你读懂了论文。</strong>
+        </div>
+        <span class="game-banner-stamp">${completedLevelCount()}/4 已结</span>
+      </div>
       <div class="game-top">
-        <span class="game-case-id">CASE FILE · ${state.levels.length} LEVELS</span>
+        <span class="game-case-id">CASE FILE · FINAL ${state.levels.length} LEVELS</span>
         <div class="progress-steps">${gameProgressHtml()}</div>
         <div class="score-chip"><strong>${totalScore()}</strong><span>/ 100</span></div>
       </div>
@@ -2163,10 +2272,22 @@ function useHint() {
   const level = state.levels[state.currentLevel];
   const levelState = state.levelStates[state.currentLevel];
   if (!level || !levelState || !level.hint || levelState.hintUsed) return;
+  const character = activeCharacter();
+  let free = false;
+  if (character?.id === "lin" && state.story?.freeHintAvailable) {
+    state.story.freeHintAvailable = false;
+    free = true;
+  } else if (character?.id === "gu" && level.type === "review") {
+    free = true;
+  }
   levelState.hintUsed = true;
+  levelState.hintFree = free;
   scheduleProgressSave();
   render();
-  showToast("提示已展开，本关将扣除 3 分。", "warn");
+  showToast(
+    free ? "提示已展开，角色能力生效，本关不扣分。" : "提示已展开，本关将扣除 3 分。",
+    free ? "" : "warn",
+  );
 }
 
 function nextLevel() {
@@ -2273,6 +2394,8 @@ function resultsHtml() {
   const score = totalScore();
   const tier = scoreTier(score);
   const pct = Math.max(0, Math.min(100, score));
+  const character = activeCharacter();
+  const summary = storyProgressSummary();
   return `
     <div class="results">
       <section class="results-hero">
@@ -2280,7 +2403,8 @@ function resultsHtml() {
           <div class="closed-stamp">CASE CLOSED · 已结案</div>
           <h1>${score} 分，案件已结。</h1>
           <p class="results-sub">${escapeHtml(tier.label)} · ${escapeHtml(tier.note)}</p>
-          <p class="paper-meta">${escapeHtml(paper.title || "未命名论文")} · 四关调查 · ${escapeHtml(new Date(state.completedAt || Date.now()).toLocaleDateString("zh-CN"))}</p>
+          <p class="paper-meta">${escapeHtml(paper.title || "未命名论文")} · 四幕现场 + 四关结案审讯 · ${escapeHtml(new Date(state.completedAt || Date.now()).toLocaleDateString("zh-CN"))}</p>
+          ${character ? `<p class="results-character">调查员：${escapeHtml(character.name)} · ${escapeHtml(character.role)} · ${escapeHtml(character.passive)}</p>` : ""}
           ${state.caseId ? `<div class="results-save-state"><span class="save-dot"></span>结案报告与审稿判断已同步到资料库</div>` : ""}
         </div>
         <div class="score-ring" style="--pct:${pct}%">
@@ -2288,6 +2412,21 @@ function resultsHtml() {
             <div class="score-num">${score}</div>
             <div class="score-den">TOTAL / 100</div>
           </div>
+        </div>
+      </section>
+
+      <section class="result-section">
+        <h2>四幕现场调查 <span class="result-section-note">${summary.solved}/4 推理成立</span></h2>
+        <div class="story-summary-row">
+          ${storyActs().map((act, index) => `
+            <div class="story-summary-item ${storyActSolved(act) ? "done" : ""}">
+              <span class="story-summary-num">${storyActSolved(act) ? "✓" : String(index + 1).padStart(2, "0")}</span>
+              <div>
+                <strong>${escapeHtml(act.title)}</strong>
+                <small>${escapeHtml(storyActSolved(act) ? act.short + " · 推理已成立" : "未完成")}</small>
+              </div>
+            </div>
+          `).join("")}
         </div>
       </section>
 
@@ -2432,12 +2571,21 @@ function buildReportMarkdown() {
   lines.push("");
   lines.push(`**作者：** ${paper.authors || "未报告"}  `);
   lines.push(`**年份 / 发表：** ${paper.year || "未报告"} · ${paper.venue || "未报告"}  `);
+  const character = activeCharacter();
+  if (character) lines.push(`**调查员：** ${character.name} · ${character.role} · ${character.passive}  `);
   lines.push(`**总评：** ${score}/100 · ${tier.label}  `);
   lines.push(`**生成时间：** ${new Date().toLocaleString("zh-CN")}`);
   lines.push("");
   lines.push("## 一句话简报");
   lines.push("");
   lines.push(paper.one_sentence_summary || "论文未报告");
+  lines.push("");
+  lines.push("## 四幕现场调查");
+  lines.push("");
+  storyActs().forEach((act, index) => {
+    const solved = storyActSolved(act);
+    lines.push(`- 第 ${index + 1} 幕 · ${act.title}：${solved ? "推理成立" : "未完成"}`);
+  });
   lines.push("");
   lines.push("## 逐关成绩");
   lines.push("");
@@ -2457,7 +2605,7 @@ function buildReportMarkdown() {
     lines.push(`- 技能：${level.skill || "论文理解"}`);
     lines.push(`- 判定：${levelResultStatus(level, levelState).label}，${levelScore(level, levelState)}/25`);
     lines.push(`- 作答：${reviewRecordLine(level, index)}`);
-    if (levelState.hintUsed) lines.push("- 提示：使用过（扣 3 分）");
+    if (levelState.hintUsed) lines.push(`- 提示：使用过（${levelState.hintFree ? "角色能力免扣分" : "扣 3 分"}）`);
     lines.push(`- 原文依据：${sectionLabel(level.source_section)}`);
     if (level.explanation) {
       lines.push("");
@@ -2582,6 +2730,7 @@ function closeModal(clearPending = true) {
   state.modal = null;
   state.deleteTarget = null;
   state.loadTarget = null;
+  state.storyClueId = null;
   if (clearPending) state.pendingFile = null;
   unlockBodyIfIdle();
 }
@@ -3074,14 +3223,36 @@ async function dispatchAction(actionEl) {
     case "upload":
       requestUpload();
       break;
-    case "demo":
-      await startDemo();
-      break;
     case "home":
       goHome();
       break;
     case "resume-current":
       resumeCurrent();
+      break;
+    case "open-select":
+      state.screen = "select";
+      render();
+      break;
+    case "choose-character":
+      chooseCharacter(actionEl.dataset.id);
+      break;
+    case "continue-story":
+      continueStory();
+      break;
+    case "story-hotspot":
+    case "story-clue":
+      openStoryHotspot(actionEl.dataset.id);
+      break;
+    case "story-deduct": {
+      const index = Number(actionEl.dataset.index);
+      if (Number.isInteger(index)) submitStoryDeduction(index);
+      break;
+    }
+    case "next-story-act":
+      await nextStoryAct();
+      break;
+    case "open-story-quote":
+      openStoryClueSource(actionEl.dataset.id);
       break;
     case "open-library":
       await openLibrary();
@@ -3205,15 +3376,19 @@ async function dispatchAction(actionEl) {
     }
     case "restart-game": {
       if (!state.levels.length) return;
+      const characterId = state.story?.character || "";
       state.levelStates = state.levels.map(initializeLevelState);
       state.currentLevel = 0;
+      state.reflection = "";
       state.outline = "";
       state.startedAt = Date.now();
       state.completedAt = null;
-      state.screen = "game";
+      state.story = freshStory(characterId);
+      state.storyClueId = null;
+      state.screen = characterId ? "story" : "select";
       scheduleProgressSave();
       render();
-      showToast("分数已重置，可以重新调查这篇论文。");
+      showToast("调查进度与分数已重置，可以重新走一遍四幕现场。");
       break;
     }
     case "new-paper":
