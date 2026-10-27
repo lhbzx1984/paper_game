@@ -3014,10 +3014,26 @@ function purchaseOptions() {
   return Array.isArray(options) ? options : [];
 }
 
+function formatAmount(value) {
+  const text = String(value ?? "").trim();
+  const num = Number(text);
+  if (!text || !Number.isFinite(num)) return text;
+  return num.toFixed(2).replace(/\.?0+$/, "");
+}
+
 function optionPrice(option) {
-  const price = String(option?.price || "").trim();
+  const price = String(option?.price ?? "").trim();
+  if (!price) return "";
+  const shown = formatAmount(price);
   const currency = option?.currency === "CNY" || !option?.currency ? "元" : String(option.currency);
-  return price ? `¥ ${price}` : currency;
+  return currency === "元" ? `¥${shown}` : `${shown} ${currency}`;
+}
+
+function optionUnitPrice(option) {
+  const amount = Number(option?.quota_amount || 0);
+  const price = Number(option?.price ?? NaN);
+  if (!(amount > 1) || !Number.isFinite(price) || price <= 0) return "";
+  return `折合 ${formatAmount((price / amount).toFixed(2))} 元/次`;
 }
 
 function openPurchaseModal(payload = null) {
@@ -3053,10 +3069,11 @@ function renderPurchaseModal() {
       const name = String(option.display_name || "次数包").trim();
       const quota = option.quota_amount ? `${option.quota_amount} 次` : "";
       const showQuota = quota && quota.replace(/\s/g, "") !== name.replace(/\s/g, "");
+      const meta = [showQuota ? quota : "", optionUnitPrice(option)].filter(Boolean).join(" · ");
       return `
       <button class="plan-card" data-action="buy-plan" data-sku="${escapeHtml(option.sku_id || "")}" ${state.purchaseBusy ? "disabled" : ""}>
         <span class="plan-name">${escapeHtml(name)}</span>
-        <span class="plan-quota">${escapeHtml(showQuota ? quota : "")}</span>
+        <span class="plan-quota">${escapeHtml(meta)}</span>
         <span class="plan-price">${escapeHtml(optionPrice(option))}</span>
       </button>
     `;
