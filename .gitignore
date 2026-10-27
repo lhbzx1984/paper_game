@@ -5,4 +5,6 @@ __pycache__/
 data/paperquest.db
 data/paperquest.db-shm
 data/paperquest.db-wal
+data/.secret_key
 server.log
+certbot/

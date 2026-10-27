@@ -17,6 +17,113 @@ copy .env.example .env
 
 没有 API Key 也能完整体验：默认 `MOCK_LLM=1`，上传任意论文会返回内置示例案件。必须先上传论文才能进入调查与考核，页面不再提供跳过上传的试玩入口。模拟模式只用于演示流程，不会解析你上传的内容。
 
+## 部署到阿里云 ECS（Docker）
+
+推荐配置：2 vCPU / 2 GB 内存以上的 ECS，Ubuntu 22.04 或 24.04，安全组放行 22、80、443。先把域名 A 记录指向 ECS 公网 IP，再按下面步骤操作。
+
+1. 安装 Docker 与 Compose 插件（以 root 或 sudo 执行）：
+
+   ```bash
+   curl -fsSL https://get.docker.com | sh
+   sudo systemctl enable --now docker
+   docker compose version
+   ```
+
+2. 上传代码并配置环境变量。可以在本地执行 `git clone` 后 `scp`，也可以直接在服务器上拉取：
+
+   ```bash
+   cd /opt
+   sudo git clone <你的仓库地址> paperquest
+   cd paperquest
+   cp .env.example .env
+   nano .env
+   ```
+
+   `.env` 至少要改这些：
+
+   ```env
+   LLM_BASE_URL=https://api.deepseek.com/v1
+   LLM_API_KEY=sk-...
+   LLM_MODEL=deepseek-chat
+   MOCK_LLM=0
+
+   SECRET_KEY=<随机长字符串>
+   COOKIE_SECURE=0
+   PUBLIC_BASE_URL=https://你的域名
+
+   YIRENFU_API_KEY=yrp_live_...
+   YIRENFU_WEBHOOK_SECRET=...
+   BILLING_DISABLED=0
+
+   DOMAIN=你的域名
+   LETSENCRYPT_EMAIL=你的邮箱
+   ```
+
+   `SECRET_KEY` 可以用 `openssl rand -hex 32` 生成。`PUBLIC_BASE_URL` 必须与最终访问地址一致（含 `https://`），否则一人付支付完成后的回跳会落到错误地址。
+
+3. 说明：`docker-compose.yml` 会把宿主机的 `./data` 挂载到容器的 `/app/data`，SQLite 数据库、归档 PDF 和会话密钥都在这里，重建容器不会丢数据。首次启动前确认该目录可写：
+
+   ```bash
+   mkdir -p data certbot/conf certbot/www
+   ```
+
+4. 启动并申请 HTTPS 证书：
+
+   ```bash
+   chmod +x deploy/init-letsencrypt.sh
+   sudo ./deploy/init-letsencrypt.sh
+   ```
+
+   脚本会先用 HTTP 模式启动 nginx 完成 ACME 验证，再申请证书并重启 nginx。成功后访问 `https://你的域名`。之后 `certbot` 容器每 12 小时检查一次续期；建议再加一条每周重载 nginx 的定时任务，让续期后的证书生效：
+
+   ```bash
+   sudo crontab -e
+   # 加入一行（路径按你的部署目录调整）
+   0 3 * * 1 cd /opt/paperquest && /usr/bin/docker compose exec -T nginx nginx -s reload
+   ```
+
+5. 常用运维命令：
+
+   ```bash
+   docker compose ps                  # 查看状态
+   docker compose logs -f app         # 查看应用日志
+   git pull && docker compose up -d --build   # 更新代码
+   docker compose restart app         # 改完 .env 后重启应用
+   ```
+
+   备份只需要保留 `data/`（数据库与 PDF）和 `certbot/conf/`（证书）。
+
+6. 安全组与防火墙：只对公网开放 22、80、443；不要暴露 8000 端口。Gunicorn 默认 1 个 worker、8 个线程，模型连接信息保存在进程内存中，单 worker 可避免配置不一致；如果所有模型配置都写在 `.env`，可以用 `GUNICORN_WORKERS` 调整。
+
+> 如果暂时没有域名，可以先不申请证书：`docker compose up -d --build` 后 nginx 会以 HTTP 模式提供访问。但一人付的支付回跳和登录 Cookie 建议在 HTTPS 下使用。
+
+## 账号与一人付次数计费
+
+开启计费后（`BILLING_DISABLED=0` 且填写了 `YIRENFU_API_KEY`）：
+
+- 用户用**邮箱 + 密码**注册/登录，会话是 Flask 签名 Cookie（`pq_session`）。密码用 Werkzeug 哈希保存，资料库按账号隔离。
+- **每个账号的第一局免费**：首次成功解析一篇论文不扣次数，之后每局消耗 1 次。
+- 每上传并解析一篇论文算一局。前端在请求前生成一个局号 `game_id`，服务端用它作为一人付的 `idempotency_key`；失败重试会沿用同一局号，不会重复扣费。已存入资料库的案件重开不扣次数。
+- 次数不足时返回 402 并打开购买窗口。购买走支付宝「一人付」的**次数包**：服务端调用 `/purchase` 生成二维码/跳转链接，付款后次数自动进入一人付账户，页面每 10 秒刷新一次 `/access`，到账后自动继续解析上一篇论文。
+- 一人付凭证只保存在服务端环境变量，不下发浏览器。
+
+一人付控制台（<https://ai6666.com/opcpay>）需要完成：
+
+1. 创建产品，计费模式选择**次数包**（`quota_unit=COUNT`）。
+2. 配置两个次数套餐（SKU），价格按下表填写；前端读取产品接口返回的 `charging_options` 自动展示，改价只需改控制台：
+
+   | 套餐名 | 价格 | 次数 | 折合单次 |
+   | --- | --- | --- | --- |
+   | 单次 | 1 元 | 1 次 | 1 元/次 |
+   | 10 次包 | 9.9 元 | 10 次 | 0.99 元/次 |
+
+   两个 SKU 都要挂在同一个产品下，计费模式 `QUANTITY`、单位 `COUNT`、权益规则 `QUOTA`。
+3. 生成服务端 API Key（`yrp_live_...`），填入 `YIRENFU_API_KEY`。
+4. 配置通知地址 `https://你的域名/api/billing/webhook`，把签名密钥填入 `YIRENFU_WEBHOOK_SECRET`。服务端会校验 `Yirenfu-Signature`（HMAC-SHA256）、校验 300 秒时间偏差，并按事件 ID 去重。通知只做记录与幂等，次数以 `/access` 查询结果为准。
+5. 确认支付宝正式环境已开通，否则 `/purchase` 可能返回 `PURCHASE_NOT_READY` 或 503。
+
+本地调试计费时，保持 `COOKIE_SECURE=0` 即可；`docker-compose.yml` 会在生产容器里强制设为 1。也可以用 `BILLING_DISABLED=1` 完全关闭计费来验证游戏流程。
+
 ## 接入真实论文解析
 
 PaperQuest 调用任意兼容 OpenAI Chat Completions 的接口（OpenAI、DeepSeek、Moonshot、通义等）。
@@ -70,7 +177,7 @@ MOCK_LLM=0
 
 资料库按更新时间倒序排列，每张卡片显示状态（未开始 / 调查中 / 已结案）、得分、已完成关卡数、更新时间和来源。可以继续调查、删除，或从案件页再次保存以覆盖更新。删除需要二次确认；如果删除的是当前正在玩的案件，内存中的案件仍可继续阅读，但不会再自动同步，需要重新保存才会生成新记录。
 
-数据存放在本机 `data/paperquest.db`（SQLite，首次启动自动创建），不会上传到任何服务器。PDF 原件也保存在这个文件里，单个 PDF 上限 25 MB，因此资料库文件会随归档的论文数量增长。同一篇论文按正文内容哈希去重：重复保存会更新原记录并保留已有进度，而不是新增一条。项目没有账号体系，资料库只对这台机器上的当前用户可见。
+数据存放在本机 `data/paperquest.db`（SQLite，首次启动自动创建），不会上传到任何服务器。PDF 原件也保存在这个文件里，单个 PDF 上限 25 MB，因此资料库文件会随归档的论文数量增长。同一篇论文按正文内容哈希去重：重复保存会更新原记录并保留已有进度，而不是新增一条。开启计费后资料库按登录账号隔离；关闭计费时仍按本机单用户处理。
 
 ## 支持范围
 
@@ -84,7 +191,9 @@ MOCK_LLM=0
 
 ```
 app.py                  Flask 服务与 API
-storage.py              SQLite 资料库：保存、列表、读取、进度更新、删除、PDF 归档与读取
+storage.py              SQLite 资料库与账号/局/通知表
+auth.py                 邮箱密码注册登录与签名会话
+billing.py              一人付服务端客户端、webhook 验签
 llm_client.py           OpenAI-compatible 调用、运行时配置
 paper_utils.py          PDF 提取、章节切分、档案/关卡规范化、引文核验
 prompts.py              案件档案与关卡生成提示词
@@ -92,11 +201,15 @@ data/                   示例论文、示例案件、示例关卡、测试 PDF�
 static/                 单页前端（HTML / CSS / 原生 JS）
 static/detective.js     调查员、四幕现场、线索与推理锁逻辑
 static/assets/art/      预生成的封面、四幕场景与三张调查员插画
+deploy/                 Nginx 配置、入口脚本与首次证书申请脚本
 tests/                  测试 PDF 生成器与本地假模型服务
+Dockerfile              生产镜像（Python 3.12 + Gunicorn）
+docker-compose.yml      app + nginx + certbot 编排
+gunicorn.conf.py        Gunicorn 参数
 start.bat               Windows 一键启动
 ```
 
-接口：`GET /api/status`、`GET /api/demo`、`POST /api/analyze`、`POST /api/generate`、`POST /api/config`、`POST /api/config/test`，以及资料库的 `GET /api/library`、`POST /api/library`、`GET /api/library/<id>`、`PATCH /api/library/<id>`、`DELETE /api/library/<id>`。PDF 相关接口为 `GET /api/demo/pdf` 和 `GET /api/library/<id>/pdf`（默认内联预览，加 `?download=1` 下载）；保存时 `POST /api/library` 既接受 JSON，也接受 `multipart/form-data`（`payload` JSON 字段 + `pdf` 文件字段）。
+接口：`GET /api/status`、`GET /api/demo`、`POST /api/analyze`、`POST /api/generate`、`POST /api/config`、`POST /api/config/test`；账号相关为 `GET /api/auth/me`、`POST /api/auth/register`、`POST /api/auth/login`、`POST /api/auth/logout`；计费相关为 `GET /api/billing/status`、`POST /api/billing/purchase`、`POST /api/billing/webhook`；资料库为 `GET /api/library`、`POST /api/library`、`GET /api/library/<id>`、`PATCH /api/library/<id>`、`DELETE /api/library/<id>`。PDF 相关接口为 `GET /api/demo/pdf` 和 `GET /api/library/<id>/pdf`（默认内联预览，加 `?download=1` 下载）；保存时 `POST /api/library` 既接受 JSON，也接受 `multipart/form-data`（`payload` JSON 字段 + `pdf` 文件字段）。
 
 ## 验证与调试
 
@@ -109,7 +222,8 @@ python tests/mock_openai_server.py
 
 ## 已知边界
 
-- 没有账号、权限或云端同步，资料库属于本机单用户；换机器需自行拷贝 `data/paperquest.db`，归档的 PDF 也在这个文件里。
+- 开启计费时资料库按登录邮箱隔离；关闭计费时仍是本机单用户。换机器需自行拷贝 `data/paperquest.db`，归档的 PDF 也在这个文件里。
+- 首个账号首局免费依赖邮箱注册，目前没有邮箱验证码；如果担心被批量注册薅免费局，可以在注册入口加验证码/邀请码，或把免费规则改成「新账号赠送 N 次」。
 - 同一篇论文按内容哈希去重，重复保存会更新原记录并保留进度。模拟模式下所有上传内容相同，会命中同一条示例记录。
 - 模拟模式下上传真实 PDF，案件内容与「PDF 原件」都来自示例论文，不读取你上传的 PDF 正文；要解析自己的论文需关闭 `MOCK_LLM` 并配置真实模型。
 - 未保存的上传 PDF 用浏览器临时 Blob 地址预览，刷新或换设备后就没了；只有保存进资料库才会归档原件。
