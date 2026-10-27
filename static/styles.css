@@ -2567,3 +2567,143 @@ body.story-mode {
   .hero-photo { width: 100%; transform: none; }
   .select-foot { padding: 0 4px; }
 }
+
+/* ============================================================
+   Accounts, detective pass and Alipay top-up
+   ============================================================ */
+
+.account-btn,
+.buy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: var(--paper);
+  border-radius: 999px;
+  padding: 7px 11px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.account-btn:hover,
+.buy-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.buy-btn {
+  border-color: rgba(214, 166, 74, 0.55);
+  background: rgba(214, 166, 74, 0.14);
+  color: #ffe1a8;
+}
+.buy-btn:hover { background: rgba(214, 166, 74, 0.24); }
+.account-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.12);
+  flex: none;
+}
+.account-label { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.auth-card { width: min(460px, 100%); }
+.auth-tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 16px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(23, 32, 51, 0.045);
+}
+.auth-tab {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+.auth-tab.active { background: var(--paper-3); color: var(--ink); box-shadow: var(--shadow-sm); }
+
+.account-card { width: min(500px, 100%); }
+.account-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper-3);
+}
+.account-summary > div { display: grid; gap: 5px; min-width: 0; }
+.account-summary span { font-size: 10px; letter-spacing: 0.08em; color: var(--muted); text-transform: uppercase; }
+.account-summary strong {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.purchase-card { width: min(520px, 100%); }
+.plan-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "name price" "quota price";
+  align-items: center;
+  gap: 2px 14px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper-3);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+}
+.plan-card:hover:not(:disabled) {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.plan-card:disabled { opacity: 0.55; cursor: progress; }
+.plan-name { grid-area: name; font-family: var(--serif); font-size: 17px; color: var(--ink); }
+.plan-quota { grid-area: quota; font-size: 11.5px; color: var(--muted); }
+.plan-price { grid-area: price; font-size: 18px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+
+.pay-card {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper-3);
+}
+.pay-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.pay-head strong { display: block; margin-top: 3px; font-family: var(--serif); font-size: 18px; }
+.pay-label { font-size: 9.5px; letter-spacing: 0.16em; font-weight: 800; color: var(--teal); }
+.pay-price { font-size: 20px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+.qr-box { margin-top: 14px; text-align: center; }
+.qr-box img {
+  width: min(220px, 100%);
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.qr-box p { margin: 9px 0 0; font-size: 11.5px; color: var(--muted); }
+.pay-hint { margin: 12px 0 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.pay-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 14px; }
+.pay-actions .btn { text-decoration: none; }
+
+@media (max-width: 640px) {
+  .account-label { max-width: 84px; }
+  .buy-btn { display: none; }
+  .account-summary { grid-template-columns: 1fr; }
+}
+

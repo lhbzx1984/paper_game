@@ -29,6 +29,17 @@ const state = {
   lastRenderKey: "",
   modal: null,
   settingsNotice: "",
+  account: null,
+  accountLoaded: false,
+  authMode: "login",
+  authNotice: "",
+  authBusy: false,
+  purchase: null,
+  purchaseBusy: false,
+  purchaseError: "",
+  purchaseNotice: "",
+  purchaseBaseline: null,
+  gameId: "",
   caseId: null,
   libraryItems: [],
   libraryCount: 0,
@@ -58,11 +69,13 @@ const FALLBACK_LEVELS = [
 ];
 
 class AppError extends Error {
-  constructor(message, { detail = "", status = 0 } = {}) {
+  constructor(message, { detail = "", status = 0, code = "", payload = null } = {}) {
     super(message || "操作失败");
     this.name = "AppError";
     this.detail = detail;
     this.status = status;
+    this.code = code;
+    this.payload = payload;
   }
 }
 
@@ -231,7 +244,12 @@ async function apiFetch(url, options = {}, timeoutMs = 240000) {
     if (!response.ok) {
       const message = data?.error || `请求失败（HTTP ${response.status}）`;
       const detail = data?.detail || data?.error || "";
-      throw new AppError(message, { detail, status: response.status });
+      throw new AppError(message, {
+        detail,
+        status: response.status,
+        code: data?.code || "",
+        payload: data,
+      });
     }
     return data ?? {};
   } catch (error) {
@@ -345,6 +363,50 @@ function sectionLabel(value) {
   return String(value || "正文").trim() || "正文";
 }
 
+function billingOn() {
+  return Boolean(state.account?.billing?.enabled);
+}
+
+function accountUser() {
+  return state.account?.user || null;
+}
+
+function quotaText() {
+  const billing = state.account?.billing;
+  if (!billing?.enabled) return "";
+  if (billing.free_trial_available) return "首局免费";
+  const remaining = billing.quota?.remaining;
+  if (typeof remaining === "number") return `剩余 ${remaining} 次`;
+  return "次数待确认";
+}
+
+function accountActionsHtml() {
+  if (!billingOn()) return "";
+  const user = accountUser();
+  if (!user) {
+    return `<button class="account-btn" data-action="open-auth">登录 / 注册</button>`;
+  }
+  return `
+    <button class="account-btn" data-action="open-account" title="${escapeHtml(user.email)}">
+      <span class="account-dot"></span>
+      <span class="account-label">${escapeHtml(quotaText())}</span>
+    </button>
+    <button class="buy-btn" data-action="open-purchase">购买次数</button>
+  `;
+}
+
+async function refreshAccount(renderAfter = true) {
+  try {
+    const data = await apiFetch("/api/auth/me", {}, 20000);
+    state.account = data;
+    state.accountLoaded = true;
+  } catch (error) {
+    if (renderAfter) showToast(`账号状态读取失败：${truncate(error.message, 80)}`, "warn");
+  }
+  renderTopbar();
+  return state.account;
+}
+
 function renderTopbar() {
   const root = $("#topbar");
   if (!root) return;
@@ -360,6 +422,7 @@ function renderTopbar() {
           </span>
         </button>
         <div class="top-actions">
+          ${accountActionsHtml()}
           <button class="status-chip ${badge.className}" data-action="open-settings" title="${escapeHtml(badge.title)}">
             <span class="status-dot"></span>
             <span class="status-label">${escapeHtml(badge.label)}</span>
@@ -703,20 +766,29 @@ async function startAnalyze(file) {
   const epoch = ++state.epoch;
   await flushProgressSave();
   resetCase();
+  if (!state.gameId) {
+    state.gameId = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `g-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+  try { sessionStorage.setItem("pq_game_id", state.gameId); } catch (_error) { /* ignore */ }
   const formData = new FormData();
   formData.append("file", file, file.name);
+  formData.append("game_id", state.gameId);
   const task = apiFetch("/api/analyze", { method: "POST", body: formData }, 300000);
   try {
     const data = await runProcessing(
       {
         title: "正在拆解论文",
         subtitle: `《${truncate(file.name, 60)}》 · 提取章节并建立案件档案`,
-        stages: ["提取论文文本与章节", "定位研究问题与缺口", "核对主张、结果与原文引文", "封装案件档案并准备四关"],
+        stages: ["校验调查通行证", "提取论文文本与章节", "定位研究问题与缺口", "核对主张、结果与原文引文", "封装案件档案并准备四关"],
         tip: "真实模型通常需要 30–120 秒。这个过程只把论文发送到你配置的接口。",
       },
       task,
     );
     if (epoch !== state.epoch) return;
+    state.gameId = "";
+    try { sessionStorage.removeItem("pq_game_id"); } catch (_error) { /* ignore */ }
     applyCasePayload(data, "upload");
     state.meta.filename = file.name;
     if (/\.pdf$/i.test(file.name) && state.meta.source === "upload" && !state.paperPdfUrl) {
@@ -724,6 +796,7 @@ async function startAnalyze(file) {
       state.paperPdfUrl = URL.createObjectURL(file);
       state.paperPdfBlobUrl = state.paperPdfUrl;
     }
+    refreshAccount(false).catch(() => {});
   } catch (error) {
     if (epoch !== state.epoch) return;
     state.processing = null;
@@ -766,8 +839,18 @@ async function handleFile(file) {
     openSettings("请先填写模型连接信息。保存成功后，我会自动继续解析你刚选择的论文。");
     return;
   }
+  if (billingOn() && !accountUser()) {
+    state.pendingFile = file;
+    openAuthModal("登录后即可开始你的第一局免费调查。");
+    return;
+  }
   state.pendingFile = null;
-  await startAnalyze(file);
+  try {
+    await startAnalyze(file);
+  } catch (error) {
+    if (handleBillingError(error, file)) return;
+    throw error;
+  }
 }
 
 function requestUpload() {
@@ -2725,8 +2808,15 @@ function showToast(message, type = "") {
 }
 
 function closeModal(clearPending = true) {
+  stopPurchasePoll();
   const root = $("#modal-root");
   if (root) root.innerHTML = "";
+  if (state.modal === "purchase") {
+    state.purchase = null;
+    state.purchaseError = "";
+    state.purchaseNotice = "";
+    state.purchaseBaseline = null;
+  }
   state.modal = null;
   state.deleteTarget = null;
   state.loadTarget = null;
@@ -2761,6 +2851,407 @@ function showError(title, error, fallback = "请稍后重试。") {
   state.modal = "error";
   lockBody();
   setTimeout(() => $(".error-card .icon-btn")?.focus(), 30);
+}
+
+function setAuthNotice(text, type = "pending") {
+  state.authNotice = text || "";
+  const node = $("#auth-status");
+  if (!node) return;
+  node.className = `form-status ${type}`;
+  node.textContent = text || "";
+}
+
+function setAuthBusy(busy) {
+  state.authBusy = busy;
+  const form = $("#auth-form");
+  if (!form) return;
+  $$("button, input", form).forEach((element) => {
+    element.disabled = busy;
+  });
+}
+
+function openAuthModal(notice = "", mode = "login") {
+  if (accountUser()) {
+    openAccountModal();
+    return;
+  }
+  state.authMode = mode;
+  state.authNotice = notice || "";
+  renderAuthModal();
+}
+
+function renderAuthModal() {
+  const root = $("#modal-root");
+  if (!root) return;
+  const isRegister = state.authMode === "register";
+  root.innerHTML = `
+    <div class="modal-backdrop open">
+      <section class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow"><span class="eyebrow-line"></span>DETECTIVE PASS</div>
+            <h2 id="auth-title">${isRegister ? "注册账号" : "登录"}</h2>
+          </div>
+          <button class="icon-btn" data-action="close-modal" aria-label="关闭登录窗口">×</button>
+        </div>
+        <p class="modal-lede">用邮箱保存你的游戏次数与资料库。每名用户的第一局免费，之后每局消耗 1 次。</p>
+        <div class="auth-tabs" role="tablist">
+          <button class="auth-tab ${isRegister ? "" : "active"}" data-action="auth-tab" data-mode="login" role="tab">登录</button>
+          <button class="auth-tab ${isRegister ? "active" : ""}" data-action="auth-tab" data-mode="register" role="tab">注册</button>
+        </div>
+        <form class="settings-form" id="auth-form" autocomplete="on">
+          <div class="field">
+            <label for="auth-email">邮箱</label>
+            <input id="auth-email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required>
+          </div>
+          <div class="field">
+            <label for="auth-password">密码</label>
+            <input id="auth-password" name="password" type="password" placeholder="${isRegister ? "至少 8 个字符" : "输入密码"}" autocomplete="${isRegister ? "new-password" : "current-password"}" required>
+          </div>
+          <div class="form-status pending" id="auth-status">${escapeHtml(state.authNotice)}</div>
+          <div class="modal-actions">
+            <button class="btn btn-ghost" type="button" data-action="close-modal">取消</button>
+            <button class="btn btn-primary" type="submit">${isRegister ? "注册并登录" : "登录"}</button>
+          </div>
+        </form>
+        <div class="field-note">次数由支付宝「一人付」管理，购买后自动到账。忘记密码暂不支持自助重置。</div>
+      </section>
+    </div>
+  `;
+  state.modal = "auth";
+  lockBody();
+  setTimeout(() => $("#auth-email")?.focus(), 40);
+}
+
+async function submitAuth() {
+  if (state.authBusy) return;
+  const form = $("#auth-form");
+  if (!form) return;
+  const formData = new FormData(form);
+  const email = String(formData.get("email") || "").trim();
+  const password = String(formData.get("password") || "");
+  if (!email || !password) {
+    setAuthNotice("请填写邮箱和密码。", "bad");
+    return;
+  }
+  const isRegister = state.authMode === "register";
+  setAuthBusy(true);
+  setAuthNotice(isRegister ? "正在创建账号…" : "正在登录…", "pending");
+  try {
+    const data = await apiFetch(
+      isRegister ? "/api/auth/register" : "/api/auth/login",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      },
+      30000,
+    );
+    state.account = { user: data.user, billing: data.billing };
+    state.accountLoaded = true;
+    const pending = state.pendingFile;
+    state.pendingFile = null;
+    state.authBusy = false;
+    closeModal(false);
+    renderTopbar();
+    refreshLibrary({ silent: true }).catch(() => {});
+    showToast(isRegister ? "账号已创建，开始你的第一局免费调查。" : "已登录。");
+    if (pending) {
+      try {
+        await startAnalyze(pending);
+      } catch (error) {
+        if (!handleBillingError(error, pending)) throw error;
+      }
+    }
+  } catch (error) {
+    setAuthBusy(false);
+    setAuthNotice(error.message || "登录失败。", "bad");
+  }
+}
+
+function openAccountModal() {
+  const root = $("#modal-root");
+  if (!root) return;
+  const user = accountUser();
+  if (!user) {
+    openAuthModal();
+    return;
+  }
+  const billing = state.account?.billing || {};
+  const remaining = billing.quota && typeof billing.quota.remaining === "number"
+    ? `${billing.quota.remaining} 次`
+    : "待确认";
+  root.innerHTML = `
+    <div class="modal-backdrop open">
+      <section class="modal-card account-card" role="dialog" aria-modal="true" aria-labelledby="account-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow"><span class="eyebrow-line"></span>DETECTIVE PASS</div>
+            <h2 id="account-title">我的账号</h2>
+          </div>
+          <button class="icon-btn" data-action="close-modal" aria-label="关闭账号窗口">×</button>
+        </div>
+        <div class="account-summary">
+          <div><span>邮箱</span><strong>${escapeHtml(user.email)}</strong></div>
+          <div><span>剩余次数</span><strong>${escapeHtml(remaining)}</strong></div>
+          <div><span>首局免费</span><strong>${billing.free_trial_available ? "尚未使用" : "已使用"}</strong></div>
+        </div>
+        ${billing.error ? `<div class="form-status bad">${escapeHtml(billing.error)}</div>` : ""}
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-action="logout">退出登录</button>
+          <button class="btn btn-primary" data-action="open-purchase">购买次数</button>
+        </div>
+        <div class="field-note">每上传并解析一篇论文消耗 1 次；已存入资料库的案件重开不扣次数。</div>
+      </section>
+    </div>
+  `;
+  state.modal = "account";
+  lockBody();
+}
+
+function purchaseOptions() {
+  const options = state.account?.billing?.product?.charging_options;
+  return Array.isArray(options) ? options : [];
+}
+
+function optionPrice(option) {
+  const price = String(option?.price || "").trim();
+  const currency = option?.currency === "CNY" || !option?.currency ? "元" : String(option.currency);
+  return price ? `¥ ${price}` : currency;
+}
+
+function openPurchaseModal(payload = null) {
+  if (!billingOn()) {
+    showToast("服务端未启用收费，无需购买。");
+    return;
+  }
+  if (!accountUser()) {
+    openAuthModal("登录后即可购买次数。");
+    return;
+  }
+  if (payload?.billing) state.account.billing = payload.billing;
+  const remaining = state.account?.billing?.quota?.remaining;
+  state.purchaseBaseline = typeof remaining === "number" ? remaining : 0;
+  state.purchase = null;
+  state.purchaseError = "";
+  state.purchaseNotice = "";
+  renderPurchaseModal();
+}
+
+function renderPurchaseModal() {
+  const root = $("#modal-root");
+  if (!root) return;
+  const billing = state.account?.billing || {};
+  const quota = billing.quota || {};
+  const remaining = typeof quota.remaining === "number" ? `${quota.remaining} 次` : "待确认";
+  const options = purchaseOptions();
+  const purchase = state.purchase;
+  const productName = billing.product?.name || "PaperQuest 次数包";
+
+  const optionsHtml = options.length
+    ? options.map((option) => {
+      const name = String(option.display_name || "次数包").trim();
+      const quota = option.quota_amount ? `${option.quota_amount} 次` : "";
+      const showQuota = quota && quota.replace(/\s/g, "") !== name.replace(/\s/g, "");
+      return `
+      <button class="plan-card" data-action="buy-plan" data-sku="${escapeHtml(option.sku_id || "")}" ${state.purchaseBusy ? "disabled" : ""}>
+        <span class="plan-name">${escapeHtml(name)}</span>
+        <span class="plan-quota">${escapeHtml(showQuota ? quota : "")}</span>
+        <span class="plan-price">${escapeHtml(optionPrice(option))}</span>
+      </button>
+    `;
+    }).join("")
+    : `<div class="form-status pending">一人付项目还没有可用套餐，请先在控制台配置次数包。</div>`;
+
+  const payHtml = purchase ? `
+    <div class="pay-card">
+      <div class="pay-head">
+        <div>
+          <div class="pay-label">ALIPAY · 一人付</div>
+          <strong>${escapeHtml(purchase.option?.display_name || "购买次数")}</strong>
+        </div>
+        <span class="pay-price">${purchase.option ? escapeHtml(optionPrice(purchase.option)) : ""}</span>
+      </div>
+      ${purchase.purchase_qr_code ? `
+        <div class="qr-box">
+          <img src="${escapeHtml(purchase.purchase_qr_code)}" alt="支付宝购买二维码">
+          <p>用支付宝扫码购买，付款后次数会自动到账。</p>
+        </div>
+      ` : `<p class="pay-hint">请在支付宝中打开购买页面完成支付。</p>`}
+      <div class="pay-actions">
+        ${purchase.purchase_url ? `<a class="btn btn-primary" href="${escapeHtml(purchase.purchase_url)}" target="_blank" rel="noopener">在支付宝打开</a>` : ""}
+        <button class="btn btn-ghost" data-action="refresh-quota" ${state.purchaseBusy ? "disabled" : ""}>我已支付，刷新次数</button>
+      </div>
+      ${purchase.expire_time ? `<div class="field-note">购买入口有效期至 ${escapeHtml(purchase.expire_time)}（北京时间）。</div>` : ""}
+    </div>
+  ` : optionsHtml;
+
+  root.innerHTML = `
+    <div class="modal-backdrop open">
+      <section class="modal-card purchase-card" role="dialog" aria-modal="true" aria-labelledby="purchase-title">
+        <div class="modal-head">
+          <div>
+            <div class="eyebrow"><span class="eyebrow-line"></span>GAME PASS</div>
+            <h2 id="purchase-title">购买调查次数</h2>
+          </div>
+          <button class="icon-btn" data-action="close-modal" aria-label="关闭购买窗口">×</button>
+        </div>
+        <p class="modal-lede">${escapeHtml(productName)}：每局消耗 1 次，次数永久有效。当前剩余 <strong>${escapeHtml(remaining)}</strong>。</p>
+        ${payHtml}
+        ${state.purchaseError ? `<div class="form-status bad">${escapeHtml(state.purchaseError)}</div>` : ""}
+        ${state.purchaseNotice ? `<div class="form-status ok">${escapeHtml(state.purchaseNotice)}</div>` : ""}
+        <div class="field-note">${purchase
+          ? "付款完成后通常几秒内到账；到账会自动刷新并继续。若暂时未显示，请点击「我已支付，刷新次数」，不要重复付款。"
+          : "先选择一个套餐，再用支付宝扫码或打开购买页面。付款完成后次数会自动到账。"}</div>
+      </section>
+    </div>
+  `;
+  state.modal = "purchase";
+  lockBody();
+}
+
+let purchaseTimer = null;
+
+function startPurchasePoll() {
+  stopPurchasePoll();
+  purchaseTimer = setInterval(() => {
+    checkPurchase().catch(() => {});
+  }, 10000);
+}
+
+function stopPurchasePoll() {
+  if (purchaseTimer) {
+    clearInterval(purchaseTimer);
+    purchaseTimer = null;
+  }
+}
+
+async function checkPurchase() {
+  if (state.modal !== "purchase") {
+    stopPurchasePoll();
+    return;
+  }
+  const data = await apiFetch("/api/auth/me", {}, 15000);
+  state.account = data;
+  state.accountLoaded = true;
+  renderTopbar();
+  const remaining = data.billing?.quota?.remaining;
+  const baseline = typeof state.purchaseBaseline === "number" ? state.purchaseBaseline : 0;
+  const arrived = typeof remaining === "number" && remaining > baseline;
+  if (!arrived) {
+    if (state.modal === "purchase") renderPurchaseModal();
+    return;
+  }
+  stopPurchasePoll();
+  const pending = state.pendingFile;
+  state.pendingFile = null;
+  closeModal(false);
+  showToast("次数已到账，继续解析论文…");
+  if (pending) {
+    try {
+      await startAnalyze(pending);
+    } catch (error) {
+      if (!handleBillingError(error, pending)) showError("论文解析没有完成", error);
+    }
+  }
+}
+
+async function buyPlan(skuId) {
+  if (state.purchaseBusy) return;
+  state.purchaseBusy = true;
+  state.purchaseError = "";
+  state.purchaseNotice = "";
+  renderPurchaseModal();
+  try {
+    const data = await apiFetch(
+      "/api/billing/purchase",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sku_id: skuId || "" }),
+      },
+      30000,
+    );
+    state.purchase = data;
+  } catch (error) {
+    state.purchaseError = error.message || "创建购买入口失败。";
+  } finally {
+    state.purchaseBusy = false;
+    if (state.modal === "purchase") renderPurchaseModal();
+    startPurchasePoll();
+  }
+}
+
+async function refreshQuota() {
+  if (state.purchaseBusy) return;
+  state.purchaseBusy = true;
+  state.purchaseError = "";
+  renderPurchaseModal();
+  try {
+    const data = await apiFetch("/api/auth/me", {}, 20000);
+    state.account = data;
+    state.accountLoaded = true;
+    renderTopbar();
+    const remaining = data.billing?.quota?.remaining;
+    state.purchaseNotice = typeof remaining === "number"
+      ? `已刷新：当前剩余 ${remaining} 次。`
+      : "已刷新，仍未查到到账，请稍后再试。";
+  } catch (error) {
+    state.purchaseError = error.message || "刷新失败。";
+  } finally {
+    state.purchaseBusy = false;
+    if (state.modal === "purchase") renderPurchaseModal();
+  }
+}
+
+async function logout() {
+  try {
+    const data = await apiFetch("/api/auth/logout", { method: "POST" }, 15000);
+    state.account = { user: null, billing: data.billing || state.account?.billing || null };
+    state.accountLoaded = true;
+    closeModal();
+    renderTopbar();
+    refreshLibrary({ silent: true }).catch(() => {});
+    showToast("已退出登录，本地案件仍可阅读，但不会再同步资料库。");
+  } catch (error) {
+    showToast(`退出登录失败：${truncate(error.message, 80)}`, "bad");
+  }
+}
+
+function handleBillingError(error, file = null) {
+  const code = error?.code || "";
+  if (code === "LOGIN_REQUIRED") {
+    if (file) state.pendingFile = file;
+    openAuthModal("请先登录，再开始你的第一局免费调查。");
+    return true;
+  }
+  if (code === "QUOTA_REQUIRED") {
+    if (file) state.pendingFile = file;
+    state.gameId = "";
+    try { sessionStorage.removeItem("pq_game_id"); } catch (_error) { /* ignore */ }
+    openPurchaseModal(error.payload || null);
+    return true;
+  }
+  if (code === "GAME_KEY_REUSED") {
+    state.gameId = "";
+    try { sessionStorage.removeItem("pq_game_id"); } catch (_error) { /* ignore */ }
+    if (file) state.pendingFile = file;
+    showToast("这一局已经结束，请重新选择论文开始新的一局。", "warn");
+    return true;
+  }
+  if (code === "BILLING_FAILED") {
+    state.gameId = "";
+    try { sessionStorage.removeItem("pq_game_id"); } catch (_error) { /* ignore */ }
+    if (file) state.pendingFile = file;
+    showToast("这一局的扣费没有成功，请重新上传开始新的一局。", "bad");
+    return true;
+  }
+  if (code === "BILLING_PENDING") {
+    if (file) state.pendingFile = file;
+    showToast(error.message || "扣费结果确认中，请稍后重试。", "warn");
+    return true;
+  }
+  return false;
 }
 
 function settingsModeText() {
@@ -2913,6 +3404,7 @@ async function saveSettings(testOnly = false) {
       try {
         await startAnalyze(fileToContinue);
       } catch (error) {
+        if (handleBillingError(error, fileToContinue)) return;
         showError("论文解析没有完成", error);
       }
     } else {
@@ -3290,6 +3782,29 @@ async function dispatchAction(actionEl) {
     case "open-settings":
       await openSettings();
       break;
+    case "open-auth":
+      openAuthModal();
+      break;
+    case "auth-tab":
+      state.authMode = actionEl.dataset.mode === "register" ? "register" : "login";
+      state.authNotice = "";
+      renderAuthModal();
+      break;
+    case "open-account":
+      openAccountModal();
+      break;
+    case "open-purchase":
+      openPurchaseModal();
+      break;
+    case "buy-plan":
+      await buyPlan(actionEl.dataset.sku || "");
+      break;
+    case "refresh-quota":
+      await refreshQuota();
+      break;
+    case "logout":
+      await logout();
+      break;
     case "close-modal":
       closeModal();
       break;
@@ -3431,6 +3946,14 @@ function bindEvents() {
         console.error(error);
         setSettingsStatus(error?.message || "保存失败。", "bad");
       });
+      return;
+    }
+    if (event.target?.id === "auth-form") {
+      event.preventDefault();
+      submitAuth().catch((error) => {
+        console.error(error);
+        setAuthNotice(error?.message || "登录失败。", "bad");
+      });
     }
   });
 
@@ -3511,6 +4034,7 @@ async function init() {
     renderTopbar();
     if (state.screen === "home") render();
   }
+  await refreshAccount(false);
 }
 
 if (document.readyState === "loading") {

@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+.env
+server.log
+certbot
+data/paperquest.db
+data/paperquest.db-shm
+data/paperquest.db-wal
+data/.secret_key
+tests
