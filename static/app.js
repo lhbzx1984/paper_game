@@ -3078,7 +3078,7 @@ function renderPurchaseModal() {
       </button>
     `;
     }).join("")
-    : `<div class="form-status pending">一人付项目还没有可用套餐，请先在控制台配置次数包。</div>`;
+    : `<div class="form-status pending">${escapeHtml(billing.notice || "一人付项目还没有可用套餐，请先在控制台配置次数包。")}</div>`;
 
   const payHtml = purchase ? `
     <div class="pay-card">

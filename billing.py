@@ -172,6 +172,29 @@ def public_info() -> dict[str, Any]:
     }
 
 
+def quota_ready(product: dict[str, Any]) -> tuple[bool, str, list[dict[str, Any]]]:
+    """判断一人付产品是否按次数计费，返回 (是否可用, 提示, 可售套餐)。"""
+    options = product.get("charging_options") or []
+    quota_options = [
+        item for item in options
+        if isinstance(item, dict)
+        and item.get("entitlement_rule") == "QUOTA"
+        and item.get("billing_mode") == "QUANTITY"
+    ]
+    ready = (
+        product.get("billing_mode") == "QUANTITY"
+        and product.get("quota_unit") == "COUNT"
+        and bool(quota_options)
+    )
+    if ready:
+        return True, "", quota_options
+    message = (
+        "一人付产品当前不是「次数包」（需要 QUANTITY / COUNT / QUOTA），"
+        "请在控制台改成按次计费，并上架「1 元 1 次」「9.9 元 10 次」两个套餐后再收款。"
+    )
+    return False, message, quota_options
+
+
 def verify_webhook(raw_body: bytes, headers: dict[str, str], secret: str, now: float | None = None) -> dict[str, Any]:
     """校验一人付通知签名。headers 的键必须是小写。"""
     if not isinstance(raw_body, bytes) or not raw_body:

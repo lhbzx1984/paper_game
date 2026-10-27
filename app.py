@@ -165,18 +165,20 @@ def _billing_state(user: dict[str, Any] | None) -> dict[str, Any]:
             state["notice"] = "暂时读不到剩余次数，请稍后刷新。"
     try:
         product = billing.client.product()
+        ready, message, options = billing.quota_ready(product)
         state["product"] = {
             "name": product.get("product_name") or "PaperQuest",
             "billing_mode": product.get("billing_mode") or "",
             "quota_unit": product.get("quota_unit") or "",
             "capability_status": product.get("capability_status") or "",
-            "charging_options": product.get("charging_options") or [],
+            "charging_options": options,
+            "ready": ready,
         }
-        if product.get("quota_unit") and product.get("quota_unit") != "COUNT":
-            state["notice"] = "一人付项目当前不是「次数包（COUNT）」，请在控制台切换后再收款。"
+        if not ready:
+            state["notice"] = message
     except billing.BillingError:
         pass
-    if state["free_trial_available"]:
+    if state["free_trial_available"] and not state["notice"]:
         state["notice"] = "首局免费，本局不扣次数。"
     return state
 
@@ -380,6 +382,15 @@ def api_billing_purchase():
     sku_id = str(payload.get("sku_id") or "").strip()
     if len(sku_id) > 128:
         return api_error("套餐编号不正确")
+    try:
+        product = billing.client.product(force=True)
+    except billing.BillingError as exc:
+        return api_error(f"读取一人付套餐失败：{exc.message}", 502, exc.detail, code=exc.code)
+    ready, message, options = billing.quota_ready(product)
+    if not ready:
+        return api_error(message, 409, code="BILLING_PRODUCT_MISMATCH")
+    if not sku_id and options:
+        sku_id = str(options[0].get("sku_id") or "")
     callback = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
     key = f"buy-{uuid.uuid4().hex}"
     try:
