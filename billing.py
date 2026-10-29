@@ -48,9 +48,18 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 class BillingClient:
     def __init__(self) -> None:
-        self.base_url = os.getenv("YIRENFU_BASE_URL", DEFAULT_BASE_URL).strip().rstrip("/")
-        self.api_key = os.getenv("YIRENFU_API_KEY", "").strip()
-        self.timeout = float(os.getenv("YIRENFU_TIMEOUT", "20") or 20)
+        # 优先使用一人付官方约定的 opcpay_api_key，兼容历史 YIRENFU_API_KEY。
+        self.api_key = (
+            os.getenv("opcpay_api_key", "").strip()
+            or os.getenv("OPCPAY_API_KEY", "").strip()
+            or os.getenv("YIRENFU_API_KEY", "").strip()
+        )
+        self.base_url = (
+            os.getenv("opcpay_base_url", "").strip()
+            or os.getenv("OPCPAY_BASE_URL", "").strip()
+            or os.getenv("YIRENFU_BASE_URL", DEFAULT_BASE_URL).strip()
+        ).rstrip("/")
+        self.timeout = float(os.getenv("YIRENFU_TIMEOUT", "60") or 60)
         self._product_cache: dict[str, Any] | None = None
         self._product_cache_at = 0.0
         self._lock = threading.Lock()
@@ -139,6 +148,26 @@ class BillingClient:
             body["callback_url"] = callback_url
         return self._request("/purchase", body)
 
+    def purchase_query(self, user_id: str, idempotency_key: str) -> dict[str, Any]:
+        """恢复原购买入口记录（不是支付宝逐笔支付状态）。"""
+        return self._request("/purchase/query", {"user_id": user_id, "idempotency_key": idempotency_key})
+
+    def webhook(self) -> dict[str, Any]:
+        """查询当前 webhook 配置。"""
+        return self._request("/webhook")
+
+    def save_webhook(self, url: str, enabled: bool = True) -> dict[str, Any]:
+        """注册/更新 webhook 回调地址。"""
+        return self._request("/webhook", {"url": url, "enabled": enabled}, method="PUT")
+
+    def rotate_webhook(self) -> dict[str, Any]:
+        """轮换 webhook 签名密钥。"""
+        return self._request("/webhook/rotate", {})
+
+    def events(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        """列出权益/核销事件。"""
+        return self._request("/events/list", options or {})
+
     def capabilities(self) -> dict[str, Any]:
         return self._request("/capabilities")
 
@@ -173,26 +202,40 @@ def public_info() -> dict[str, Any]:
 
 
 def quota_ready(product: dict[str, Any]) -> tuple[bool, str, list[dict[str, Any]]]:
-    """判断一人付产品是否按次数计费，返回 (是否可用, 提示, 可售套餐)。"""
+    """判断一人付产品是否按次数计费且已启用，返回 (是否可用, 提示, 可售套餐)。"""
     options = product.get("charging_options") or []
     quota_options = [
         item for item in options
         if isinstance(item, dict)
         and item.get("entitlement_rule") == "QUOTA"
         and item.get("billing_mode") == "QUANTITY"
+        and item.get("quota_unit") in {"COUNT", None}
     ]
+    capability = str(product.get("capability_status") or "").upper()
     ready = (
         product.get("billing_mode") == "QUANTITY"
         and product.get("quota_unit") == "COUNT"
+        and capability == "ENABLED"
         and bool(quota_options)
     )
     if ready:
         return True, "", quota_options
-    message = (
-        "一人付产品当前不是「次数包」（需要 QUANTITY / COUNT / QUOTA），"
-        "请在控制台改成按次计费，并上架「1 元 1 次」「9.9 元 10 次」两个套餐后再收款。"
-    )
+    if capability and capability != "ENABLED":
+        message = "一人付产品当前未启用（capability_status != ENABLED），请在控制台开启后再收款。"
+    else:
+        message = (
+            "一人付产品当前不是「次数包」（需要 QUANTITY / COUNT / QUOTA），"
+            "请在控制台改成按次计费，并上架「1 元 1 次」「9.9 元 10 次」两个套餐后再收款。"
+        )
     return False, message, quota_options
+
+
+def webhook_secret() -> str:
+    return (
+        os.getenv("opcpay_webhook_secret", "").strip()
+        or os.getenv("OPCPAY_WEBHOOK_SECRET", "").strip()
+        or os.getenv("YIRENFU_WEBHOOK_SECRET", "").strip()
+    )
 
 
 def verify_webhook(raw_body: bytes, headers: dict[str, str], secret: str, now: float | None = None) -> dict[str, Any]:

@@ -425,7 +425,7 @@ def api_billing_purchase():
 
 @app.post("/api/billing/webhook")
 def api_billing_webhook():
-    secret = os.getenv("YIRENFU_WEBHOOK_SECRET", "").strip()
+    secret = billing.webhook_secret()
     if not secret:
         return api_error("服务端未配置通知密钥", 503, code="WEBHOOK_NOT_CONFIGURED")
     raw = request.get_data(cache=True)
