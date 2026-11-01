@@ -15,6 +15,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 import auth
 import billing
+import image_client
 from llm_client import LLMError, chat_json, public_status, set_config, test_connection
 from paper_utils import (
     build_digest,
@@ -439,6 +440,32 @@ def api_billing_webhook():
         return api_error(f"通知验签失败：{exc}", 401, code="INVALID_SIGNATURE")
     storage.record_billing_event(str(event["id"]), event)
     return jsonify({"ok": True})
+
+
+@app.post("/api/image/generate")
+def api_image_generate():
+    """生成图像（论文庭审游戏用：概念图、场景图、裁决海报等）。"""
+    if not image_client.enabled():
+        return api_error("服务端未配置图像生成 API Key", 503, code="IMAGE_NOT_CONFIGURED")
+    payload = request.get_json(silent=True) or {}
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        return api_error("缺少 prompt", 400, code="MISSING_PROMPT")
+    size = str(payload.get("size") or "1K").strip()
+    ratio = str(payload.get("ratio") or "1:1").strip()
+    images = payload.get("images") if isinstance(payload.get("images"), list) else None
+    return_b64 = bool(payload.get("return_base64"))
+    try:
+        result = image_client.generate(
+            prompt,
+            size=size,
+            ratio=ratio,
+            images=images,
+            return_base64=return_b64,
+        )
+    except image_client.ImageError as exc:
+        return api_error(exc.message, 502, exc.detail, code="IMAGE_GENERATION_FAILED")
+    return jsonify({"ok": True, **result})
 
 
 @app.post("/api/config")
