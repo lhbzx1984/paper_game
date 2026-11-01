@@ -54,6 +54,12 @@ def public_status() -> dict[str, Any]:
 
 
 def set_config(base_url: str | None, api_key: str | None, model: str | None) -> dict[str, Any]:
+    # 若通过环境变量强制 mock 模式，则忽略前端传来的配置，始终保持 mock。
+    if _env_flag("MOCK_LLM"):
+        RUNTIME["mock"] = True
+        if model:
+            RUNTIME["model"] = model
+        return public_status()
     base_url = (base_url or "").strip().rstrip("/")
     api_key = (api_key or "").strip()
     model = (model or "").strip()
