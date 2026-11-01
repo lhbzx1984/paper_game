@@ -392,13 +392,16 @@ def api_billing_purchase():
     if not sku_id and options:
         sku_id = str(options[0].get("sku_id") or "")
     callback = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    # 一人付要求 callback_url 必须是项目官网域名下的 HTTPS 地址；
+    # 否则（如 IP + HTTP 调试环境）不传回调地址，仍可正常生成购买入口。
+    callback_url = f"{callback}/" if callback.startswith("https://") else ""
     key = f"buy-{uuid.uuid4().hex}"
     try:
         result = billing.client.purchase(
             user["id"],
             key,
             sku_id=sku_id,
-            callback_url=f"{callback}/" if callback else "",
+            callback_url=callback_url,
         )
     except billing.BillingError as exc:
         return api_error(f"创建购买入口失败：{exc.message}", 502, exc.detail, code=exc.code)
