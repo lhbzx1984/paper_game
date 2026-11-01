@@ -4,6 +4,8 @@
 
 const state = {
   screen: "home",
+  audioMuted: false,
+  audioInited: false,
   status: null,
   statusError: "",
   epoch: 0,
@@ -537,6 +539,9 @@ function renderTopbar() {
           </span>
         </button>
         <div class="top-actions">
+          <button class="audio-toggle ${state.audioMuted ? "muted" : ""}" data-action="toggle-audio" title="${state.audioMuted ? "开启音效" : "关闭音效"}">
+            <span class="audio-wave"><span></span><span></span><span></span></span>
+          </button>
           ${accountActionsHtml()}
           <button class="status-chip ${badge.className}" data-action="open-settings" title="${escapeHtml(badge.title)}">
             <span class="status-dot"></span>
@@ -700,6 +705,10 @@ function render() {
   else if (state.screen === "library") html = libraryHtml();
   else html = homeHtml();
   host.innerHTML = html;
+  // 转场闪烁效果
+  host.classList.remove("screen-transition");
+  void host.offsetWidth; // 强制重排以重启动画
+  host.classList.add("screen-transition");
 
   const key = state.screen === "game"
     ? `game:${state.currentLevel}`
@@ -2775,12 +2784,14 @@ function nextLevel() {
   if (state.currentLevel >= state.levels.length - 1) {
     state.completedAt = Date.now();
     state.screen = "results";
+    playSound("sting", "verdict");
     scheduleProgressSave();
     render();
     return;
   }
   state.currentLevel += 1;
   state.screen = "game";
+  playSound("sting", "transition");
   scheduleProgressSave();
   render();
 }
@@ -4194,6 +4205,9 @@ async function dispatchAction(actionEl) {
     case "open-settings":
       await openSettings();
       break;
+    case "toggle-audio":
+      toggleAudio();
+      break;
     case "open-auth":
       openAuthModal();
       break;
@@ -4419,11 +4433,14 @@ async function discSubmit(index) {
     });
     if (data.match) {
       cs.found = true;
+      playSound("sting", "reveal");
+      playSound("ui", "success");
       showToast("✓ 证据定位成功！", "ok");
       // 自动跳到下一条未完成的 claim
       const nextIdx = (levelState.claimStates || []).findIndex((s, i) => !s.found);
       if (nextIdx >= 0) levelState.currentClaimIndex = nextIdx;
     } else {
+      playSound("ui", "fail");
       showToast("所选文本不包含正确证据，再仔细找找。", "warn");
     }
   } catch (error) {
@@ -4477,12 +4494,15 @@ function chainSubmit() {
     levelState.resolved = true;
     levelState.quality = levelState.attempts === 1 ? "first" : "retry";
     levelState.correct_order = correct;
+    playSound("ui", "success");
   } else if (levelState.attempts >= 2) {
     levelState.resolved = true;
     levelState.quality = "revealed";
     levelState.correct_order = correct;
     levelState.order = correct.slice();
+    playSound("sting", "reveal");
   } else {
+    playSound("ui", "fail");
     showToast("排序不正确，再想想逻辑链条：方法→实验→结果→主张。", "warn");
   }
   scheduleProgressSave();
@@ -4550,6 +4570,8 @@ function trialSubmit() {
   const evidenceCorrect = ts.evidenceSelected === trial.correct_evidence_id;
   ts.submitted = true;
   ts.correct = rulingCorrect && evidenceCorrect;
+  if (ts.correct) playSound("ui", "success");
+  else { playSound("sting", "suspense"); playSound("ui", "fail"); }
   scheduleProgressSave();
   render();
 }
@@ -4574,6 +4596,7 @@ async function verdictSubmit() {
       body: JSON.stringify({ case_file: state.caseData, verdict: text }),
     });
     levelState.score = data.score;
+    playSound("sting", "verdict");
   } catch (error) {
     showToast(error?.message || "评分失败，请重试。", "warn");
   } finally {
@@ -4608,8 +4631,44 @@ async function verdictGenPoster() {
   render();
 }
 
+/* ---------- 音频系统 ---------- */
+
+function ensureAudio() {
+  if (state.audioInited) return;
+  if (typeof Atmosphere === "undefined") return;
+  try {
+    Atmosphere.init();
+    Atmosphere.resume();
+    state.audioInited = true;
+    if (!state.audioMuted) Atmosphere.startAmbient();
+  } catch (e) {
+    console.warn("audio init failed", e);
+  }
+}
+
+function toggleAudio() {
+  ensureAudio();
+  state.audioMuted = !state.audioMuted;
+  if (typeof Atmosphere !== "undefined") {
+    Atmosphere.setMuted(state.audioMuted);
+    if (!state.audioMuted) Atmosphere.ui("click");
+  }
+  renderTopbar();
+}
+
+function playSound(type, name) {
+  if (state.audioMuted) return;
+  ensureAudio();
+  if (typeof Atmosphere === "undefined") return;
+  try {
+    if (type === "ui") Atmosphere.ui(name);
+    else if (type === "sting") Atmosphere.sting(name);
+  } catch (e) { /* ignore */ }
+}
+
 function bindEvents() {
   document.addEventListener("click", (event) => {
+    ensureAudio();
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (target.classList.contains("modal-backdrop")) {
