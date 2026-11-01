@@ -2,6 +2,7 @@
   "schema_version": "1.0",
   "paper": {
     "title": "SparseDrop: Structured Dropout for Low-Resource Text Classification",
+    "domain": "NLP",
     "authors": "Alicia Chen, Marco Rivera, Lina Wang",
     "year": "2024",
     "venue": "arXiv preprint",
@@ -36,7 +37,12 @@
         "evidence_quote": "Across three low-resource benchmarks, SparseDrop improves macro-F1 by 2.4 to 4.1 points over standard dropout, with the largest gains when training data are under 500 examples.",
         "section": "Abstract",
         "support": "strong",
-        "verified": true
+        "concept_keywords": "bar chart showing macro-F1 improvement across three NLP benchmarks, low-resource text classification, sparse dropout visualization",
+        "attacks": [
+          "增益数据来自摘要，未区分具体数据集和数据规模，可能掩盖某些配置下效果不显著的情况。",
+          "三个数据集都是英文分类，跨语言和跨任务的外部效度未验证。"
+        ],
+        "author_defense": "摘要数值来自 5.1 节主结果表，每个数据集在 100/500/2000/全量四种规模下均报告均值与标准差；方法不依赖特定语言或架构。"
       },
       {
         "id": "C2",
@@ -44,7 +50,12 @@
         "evidence_quote": "The gains are largest at 100 and 500 examples and shrink to about 0.6 points when the full training set is used.",
         "section": "5.1 Main Results",
         "support": "strong",
-        "verified": true
+        "concept_keywords": "line chart of performance gain vs training set size, diminishing returns curve, machine learning data scaling",
+        "attacks": [
+          "全量数据下增益仅 0.6 点，说明方法在常规资源场景几乎无效，适用范围受限。",
+          "没有报告统计显著性检验，0.6 点差异可能在随机波动范围内。"
+        ],
+        "author_defense": "论文明确定位为低资源场景方法，全量数据下收益递减是预期行为；每个配置跑了 5 个随机种子并报告标准差。"
       },
       {
         "id": "C3",
@@ -52,7 +63,12 @@
         "evidence_quote": "At 500 training examples, span masking alone improves average macro-F1 by 2.8 points, whereas head masking alone improves it by 0.7 points; combining both yields a 3.8-point gain.",
         "section": "5.2 Ablation",
         "support": "strong",
-        "verified": true
+        "concept_keywords": "ablation study bar chart comparing span masking vs head masking vs combined, neural network regularization components",
+        "attacks": [
+          "只在 500 条样本规模下做了消融，其他规模下各组件贡献是否一致未知。",
+          "头掩码概率 p_h=0.1 可能本身就偏低，不足以说明头掩码无效。"
+        ],
+        "author_defense": "消融聚焦 500 条样本是因为该规模下方法增益最显著；头掩码概率与完整方法一致，控制变量合理。"
       },
       {
         "id": "C4",
@@ -60,27 +76,29 @@
         "evidence_quote": "SparseDrop adds less than 3% training overhead and requires no architecture changes or inference cost.",
         "section": "Abstract",
         "support": "strong",
-        "verified": true
+        "concept_keywords": "inference time comparison diagram, no architecture change, zero inference overhead concept illustration",
+        "attacks": [
+          "训练开销低于 3% 是在单个 V100 上测得，未说明在更大模型或分布式训练下是否仍成立。",
+          "推理无开销只对推理阶段成立，实际部署若需重新微调仍有训练成本。"
+        ],
+        "author_defense": "推理阶段完全不施加掩码，因此无任何额外计算；训练开销来自采样和 embedding 置零，与模型大小弱相关。"
       }
     ],
     "results": [
       {
         "finding": "SST-2 上的增益：100 / 500 / 2000 / 全量分别为 3.7 / 3.7 / 2.3 / 0.6 个点。",
         "evidence_quote": "On SST-2, the gain is 3.7 points at 100 examples and 3.7 points at 500 examples; at 2000 examples the gain is 2.3 points, and at full data it is 0.6 points.",
-        "section": "5.1 Main Results",
-        "verified": true
+        "section": "5.1 Main Results"
       },
       {
         "finding": "AG News 与 TREC 也呈现相同趋势：数据越少，增益越大。",
         "evidence_quote": "On AG News, the corresponding gains are 3.4, 3.6, 2.0, and 0.5 points. On TREC, the gains are 4.1, 4.1, 2.7, and 0.6 points.",
-        "section": "5.1 Main Results",
-        "verified": true
+        "section": "5.1 Main Results"
       },
       {
         "finding": "500 条样本时，跨度掩码单独提升 2.8 点，头掩码单独仅提升 0.7 点。",
         "evidence_quote": "At 500 training examples, span masking alone improves average macro-F1 by 2.8 points, whereas head masking alone improves it by 0.7 points; combining both yields a 3.8-point gain.",
-        "section": "5.2 Ablation",
-        "verified": true
+        "section": "5.2 Ablation"
       }
     ],
     "limitations": [

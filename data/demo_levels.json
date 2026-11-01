@@ -2,136 +2,185 @@
   "schema_version": "1.0",
   "levels": [
     {
-      "id": "gap",
-      "type": "single_choice",
+      "id": "discovery",
+      "type": "discovery",
       "kicker": "LEVEL 01",
-      "title": "缺口定位",
-      "skill": "问题定位",
+      "title": "证据开示",
+      "skill": "原文精读",
       "points": 25,
-      "objective": "从引言中识别论文真正要填补的研究缺口",
-      "prompt": "根据论文引言，SparseDrop 主要试图填补哪个研究缺口？",
-      "source_section": "1 Introduction",
-      "source_quote": "Existing regularization methods operate at the element level and do not explicitly remove span-level redundancy; it remains unclear whether structured masking helps when labeled data are scarce.",
-      "options": [
-        "预训练语言模型参数量过大，难以在边缘设备部署。",
-        "现有正则化方法只在元素级丢弃，未显式处理跨度级冗余；低资源场景下结构化掩码是否有效仍不清楚。",
-        "低资源文本分类缺少统一的标注规范。",
-        "注意力机制无法建模长距离依赖。"
-      ],
-      "answer_index": 1,
-      "explanation": "论文的缺口不是“模型太大”或“缺少标注规范”，而是现有 dropout 变体都在元素级独立丢弃，无法显式移除连续的短语级线索。作者进一步指出，结构化掩码在低资源分类微调中的作用尚不清楚。",
-      "hint": "注意引言中“element level”与“span-level redundancy”的对比。"
+      "objective": "在论文原文中找到每条核心主张的证据出处",
+      "claims": [
+        {
+          "id": "C1",
+          "text": "SparseDrop 在三个低资源基准上比标准 dropout 提升 2.4–4.1 个宏平均 F1 点。",
+          "section": "Abstract",
+          "hint": "在摘要中寻找同时提到三个基准（benchmarks）和 2.4 to 4.1 points 的句子。",
+          "evidence_quote": "Across three low-resource benchmarks, SparseDrop improves macro-F1 by 2.4 to 4.1 points over standard dropout, with the largest gains when training data are under 500 examples."
+        },
+        {
+          "id": "C2",
+          "text": "数据越少，增益越明显；在全量训练集上，增益缩小到约 0.6 个点。",
+          "section": "5.1 Main Results",
+          "hint": "在 5.1 节末尾，寻找描述增益随数据量变化趋势的总结句，注意 0.6 points。",
+          "evidence_quote": "The gains are largest at 100 and 500 examples and shrink to about 0.6 points when the full training set is used."
+        },
+        {
+          "id": "C3",
+          "text": "跨度掩码是主要增益来源，头掩码单独作用有限。",
+          "section": "5.2 Ablation",
+          "hint": "在 5.2 节寻找同时出现 span masking、head masking 和具体数值（2.8、0.7、3.8）的句子。",
+          "evidence_quote": "At 500 training examples, span masking alone improves average macro-F1 by 2.8 points, whereas head masking alone improves it by 0.7 points; combining both yields a 3.8-point gain."
+        },
+        {
+          "id": "C4",
+          "text": "方法不改变架构，推理没有额外开销，训练开销低于 3%。",
+          "section": "Abstract",
+          "hint": "在摘要中寻找关于训练开销（training overhead）和推理成本（inference cost）的句子。",
+          "evidence_quote": "SparseDrop adds less than 3% training overhead and requires no architecture changes or inference cost."
+        }
+      ]
     },
     {
-      "id": "method",
-      "type": "assembly",
+      "id": "evidence_chain",
+      "type": "evidence_chain",
       "kicker": "LEVEL 02",
-      "title": "实验装配",
-      "skill": "方法拆解",
+      "title": "证据链拼图",
+      "skill": "论证结构",
       "points": 25,
-      "objective": "从实验设置中还原模型、数据、正则化组合与评价指标",
-      "prompt": "假设你要复现这篇论文的核心实验，请从下面四类卡片中各选一张，装配出正确的实验配置。",
-      "source_section": "3 Method / 4 Experimental Setup",
-      "source_quote": "SparseDrop applies two complementary masking operators at each training step: attention-head masking with probability p_h = 0.1 and contiguous span masking with probability p_s = 0.15, where span lengths are drawn uniformly from {2, 3, 4, 5}.",
-      "categories": [
+      "objective": "将证据卡片按逻辑链条排序，还原主张的推理过程",
+      "claim_text": "SparseDrop 通过结构化跨度掩码在低资源文本分类中取得显著提升。",
+      "cards": [
         {
-          "name": "主干模型",
-          "options": [
-            "ResNet-50",
-            "BiLSTM",
-            "BERT-base",
-            "GPT-2"
-          ],
-          "answer_index": 2
+          "id": 0,
+          "text": "方法设计：在 BERT-base 微调时同时施加注意力头掩码与连续跨度掩码。",
+          "quote": "SparseDrop applies two complementary masking operators at each training step: attention-head masking with probability p_h = 0.1 and contiguous span masking with probability p_s = 0.15, where span lengths are drawn uniformly from {2, 3, 4, 5}."
         },
         {
-          "name": "评测数据",
-          "options": [
-            "ImageNet / CIFAR-10",
-            "SQuAD / MNLI",
-            "WMT14 En-De",
-            "SST-2 / AG News / TREC"
-          ],
-          "answer_index": 3
+          "id": 1,
+          "text": "实验设置：在 SST-2、AG News、TREC 三个数据集的 100/500/2000/全量子集上评测。",
+          "quote": "We evaluate on three English text-classification datasets. SST-2 is a binary sentiment classification dataset. AG News is a four-class topic classification dataset. TREC is a six-class question classification dataset."
         },
         {
-          "name": "正则化组合",
-          "options": [
-            "仅权重衰减",
-            "注意力头掩码 + 连续跨度掩码",
-            "仅标签平滑",
-            "随机删除网络层"
-          ],
-          "answer_index": 1
+          "id": 2,
+          "text": "关键结果：三个低资源基准上宏平均 F1 提升 2.4–4.1 点，且 500 条以下增益最大。",
+          "quote": "Across three low-resource benchmarks, SparseDrop improves macro-F1 by 2.4 to 4.1 points over standard dropout, with the largest gains when training data are under 500 examples."
         },
         {
-          "name": "核心指标",
-          "options": [
-            "BLEU",
-            "mAP",
-            "宏平均 F1",
-            "困惑度"
-          ],
-          "answer_index": 2
+          "id": 3,
+          "text": "结论主张：结构化跨度掩码是低资源分类的有效正则化手段。",
+          "quote": "By masking contiguous spans and attention heads during fine-tuning, SparseDrop improves macro-F1 in data-scarce regimes without changing the architecture or adding inference cost."
         }
       ],
-      "explanation": "论文在 BERT-base 上微调，使用 SST-2、AG News、TREC 三个英文分类数据集，核心正则化组合是注意力头掩码与连续跨度掩码，主指标是宏平均 F1。ResNet、BLEU、mAP 等配置与本文任务不匹配。",
-      "hint": "先确认任务类型：这是文本分类，不是图像分类、问答或机器翻译。"
+      "correct_order": [0, 1, 2, 3],
+      "explanation": "逻辑链为：先提出方法设计（头掩码+跨度掩码），再说明实验设置（三个数据集、四种数据规模），然后给出关键结果（2.4–4.1 点提升），最后得出主张（结构化掩码对低资源分类有效）。"
     },
     {
-      "id": "result",
-      "type": "single_choice",
+      "id": "cross_examination",
+      "type": "cross_examination",
       "kicker": "LEVEL 03",
-      "title": "结果侦探",
-      "skill": "数据判读",
-      "points": 25,
-      "objective": "区分论文真实报告的结果与过度解读",
-      "prompt": "根据论文报告的结果，以下哪项结论有证据支持？",
-      "source_section": "5.1 Main Results",
-      "source_quote": "The gains are largest at 100 and 500 examples and shrink to about 0.6 points when the full training set is used.",
-      "options": [
-        "SparseDrop 在所有数据规模下都能稳定提升 4 个点以上。",
-        "头掩码单独使用即可解释大部分性能提升。",
-        "训练数据越少，SparseDrop 相对标准 dropout 的增益越明显；全量数据下增益缩小到约 0.6 个点。",
-        "SparseDrop 会将推理时间增加约 3%。"
-      ],
-      "answer_index": 2,
-      "explanation": "论文明确报告增益在 100 和 500 条样本时最大，全量数据时缩小到约 0.6 个点；因此“所有规模都提升 4 个点以上”是过度解读。消融显示跨度掩码才是主要来源，头掩码单独仅提升 0.7 个点；推理没有额外开销，低于 3% 的是训练开销。",
-      "hint": "回到 5.1 与 5.2，分别核对“数据规模趋势”和“消融结果”。"
-    },
-    {
-      "id": "review",
-      "type": "review",
-      "kicker": "LEVEL 04",
-      "title": "审稿对线",
+      "title": "庭审质证",
       "skill": "批判评价",
       "points": 25,
-      "objective": "基于论文证据提出有效审稿意见，并在作者回应后继续追问",
-      "prompt": "作为审稿人，以下哪条意见最站得住脚、最能用论文自身内容支持？",
-      "source_section": "6 Discussion and Limitations",
-      "source_quote": "First, all experiments use BERT-base and English classification datasets; we do not test larger models, other languages, or structured prediction tasks such as named entity recognition and syntactic parsing.",
-      "options": [
-        "论文只在 BERT-base 和英文分类任务上验证，外部效度有限；需要讨论方法对结构化预测或其他语言的适用性。",
-        "论文没有引用足够多的 2024 年文献，因此创新性不足。",
-        "宏平均 F1 不是文本分类的常用指标，结果不可信。",
-        "训练开销低于 3% 与我的经验不符，作者可能造假。"
+      "trials": [
+        {
+          "claim_id": "C2",
+          "claim_text": "数据越少，增益越明显；在全量训练集上，增益缩小到约 0.6 个点。",
+          "attack": "全量数据下仅 0.6 点增益，且未报告显著性，说明方法在常规场景几乎无效，适用范围太窄。",
+          "defense": "论文 5.3 节明确报告 100 和 500 条样本下 p<0.05 显著，全量数据下不显著；方法定位就是低资源场景，全量收益递减是预期行为。",
+          "ruling_options": ["成立", "存疑", "不成立"],
+          "correct_ruling": "成立",
+          "evidence_candidates": [
+            {
+              "id": "E1",
+              "label": "显著性检验结果",
+              "quote": "We use a paired t-test to compare SparseDrop with standard dropout across seeds. The improvement is significant at 100 and 500 examples (p < 0.05). At 2000 examples the improvement is smaller and not consistently significant across datasets, and at full data it is not significant."
+            },
+            {
+              "id": "E2",
+              "label": "SST-2 具体数值",
+              "quote": "On SST-2, the gain is 3.7 points at 100 examples and 3.7 points at 500 examples; at 2000 examples the gain is 2.3 points, and at full data it is 0.6 points."
+            },
+            {
+              "id": "E3",
+              "label": "方法设计描述",
+              "quote": "SparseDrop applies two complementary masking operators at each training step: attention-head masking with probability p_h = 0.1 and contiguous span masking with probability p_s = 0.15."
+            }
+          ],
+          "correct_evidence_id": "E1",
+          "explanation": "挑战者质疑未报告显著性，但论文 5.3 节明确给出配对 t 检验结果：100/500 条样本下 p<0.05 显著。全量数据下不显著恰说明方法定位清晰（低资源），因此主张成立。"
+        },
+        {
+          "claim_id": "C3",
+          "claim_text": "跨度掩码是主要增益来源，头掩码单独作用有限。",
+          "attack": "消融只在 500 条样本规模下做，其他规模下各组件贡献是否一致完全未知，结论缺乏普遍性。",
+          "defense": "5.2 节明确说明该模式在三个数据集上一致（This pattern holds across the three datasets），且选择 500 条是因为该规模下方法增益最显著，控制变量合理。",
+          "ruling_options": ["成立", "存疑", "不成立"],
+          "correct_ruling": "成立",
+          "evidence_candidates": [
+            {
+              "id": "E1",
+              "label": "消融数值 + 跨数据集一致性",
+              "quote": "At 500 training examples, span masking alone improves average macro-F1 by 2.8 points, whereas head masking alone improves it by 0.7 points; combining both yields a 3.8-point gain. This pattern holds across the three datasets."
+            },
+            {
+              "id": "E2",
+              "label": "机制解释",
+              "quote": "One explanation is that masking a contiguous span removes a coherent phrase-level cue, forcing the model to rely on distributed context from the remaining tokens."
+            },
+            {
+              "id": "E3",
+              "label": "局限性说明",
+              "quote": "we do not test larger models, other languages, or structured prediction tasks such as named entity recognition and syntactic parsing."
+            }
+          ],
+          "correct_evidence_id": "E1",
+          "explanation": "5.2 节原文不仅给出 2.8/0.7/3.8 的具体消融数值，还明确指出该模式在三个数据集上一致。挑战者对普遍性的质疑被原文直接回应，主张成立。"
+        },
+        {
+          "claim_id": "C4",
+          "claim_text": "方法不改变架构，推理没有额外开销，训练开销低于 3%。",
+          "attack": "训练开销低于 3% 只在单个 V100 上测得，未说明在更大模型或分布式训练下是否仍成立，结论外推过度。",
+          "defense": "开销来自 span 采样和 embedding 置零，与模型大小弱相关；推理阶段完全不施加掩码，无任何额外计算，这一点与硬件无关。",
+          "ruling_options": ["成立", "存疑", "不成立"],
+          "correct_ruling": "存疑",
+          "evidence_candidates": [
+            {
+              "id": "E1",
+              "label": "开销来源说明",
+              "quote": "The overhead comes from span sampling and embedding-zeroing operations."
+            },
+            {
+              "id": "E2",
+              "label": "推理无开销声明",
+              "quote": "At inference time, no masking is applied. SparseDrop therefore adds no parameters, no inference operations, and no changes to the model architecture."
+            },
+            {
+              "id": "E3",
+              "label": "训练开销数值",
+              "quote": "SparseDrop adds less than 3% training overhead and requires no architecture changes or inference cost."
+            }
+          ],
+          "correct_evidence_id": "E2",
+          "explanation": "推理无开销由架构设计保证（推理时不加掩码），这部分成立；但训练开销低于 3% 确实只在单个 V100 上报告，未在更大模型或分布式场景验证，存在一定外推风险，因此整体裁定为存疑。"
+        }
+      ]
+    },
+    {
+      "id": "verdict",
+      "type": "verdict",
+      "kicker": "LEVEL 04",
+      "title": "陪审团裁决",
+      "skill": "综合判断",
+      "points": 25,
+      "objective": "输出你的最终裁决，系统将与论文真实情况对比评分",
+      "claims_summary": [
+        {"id": "C1", "text": "SparseDrop 在三个低资源基准上比标准 dropout 提升 2.4–4.1 个宏平均 F1 点。", "true_support": "strong"},
+        {"id": "C2", "text": "数据越少，增益越明显；在全量训练集上，增益缩小到约 0.6 个点。", "true_support": "strong"},
+        {"id": "C3", "text": "跨度掩码是主要增益来源，头掩码单独作用有限。", "true_support": "strong"},
+        {"id": "C4", "text": "方法不改变架构，推理没有额外开销，训练开销低于 3%。", "true_support": "strong"}
       ],
-      "answer_index": 0,
-      "explanation": "最有效的审稿意见应当指向作者自己承认、且会影响结论外推的边界。论文明确承认只测试了 BERT-base 与英文分类，未覆盖结构化预测和其他语言；这是可验证的外部效度问题。其余选项要么与论文内容无关，要么缺乏证据。",
-      "hint": "好的审稿意见不是“挑刺”，而是指出结论能外推到哪里、不能外推到哪里的证据边界。",
-      "followup": {
-        "author_response": "我们同意外部效度是限制。三个数据集覆盖了二分类、四分类和六分类，且 SparseDrop 不依赖特定架构。我们已在补充材料中加入 RoBERTa 与中文 TREC 的初步结果，但结构化预测任务确实尚未验证。",
-        "prompt": "作者这样回应后，哪一种追问最专业？",
-        "source_quote": "Fourth, span masking may remove short phrases that are genuinely label-bearing, which could hurt tasks where local cues are essential.",
-        "options": [
-          "既然补了实验，原意见完全不成立，论文应直接接收。",
-          "只要换用更大的模型，方法就一定有效。",
-          "补充实验缓解了部分担忧，但仍需说明跨度掩码在命名实体识别、句法分析等结构化预测任务上的潜在风险，并给出失败案例分析。",
-          "作者应该删除局限性一节，以免削弱论文贡献。"
-        ],
-        "answer_index": 2,
-        "explanation": "作者补充了 RoBERTa 和中文数据，说明部分外部效度担忧已被回应；但结构化预测仍未验证，而且跨度掩码可能删除真正携带标签的短语。专业的追问应当承认已解决的部分，同时把未验证的风险具体化，要求失败案例分析，而不是直接接收或泛泛要求更大模型。"
-      }
+      "prompt": "请基于前三个关卡的证据，撰写你的最终裁决。需包含以下四点：\n1. 用一句话概括这篇论文的核心贡献；\n2. 你认为最可信的主张是哪一条？为什么？\n3. 你认为最值得存疑的主张是哪一条？为什么？\n4. 如果要复现这篇论文，最关键的一个细节是什么？",
+      "rubric": "评分维度（每项 0-25 分，共 100 分）：\n- 核心贡献概括（25 分）：是否准确抓住「结构化跨度掩码+低资源分类+无推理开销」的核心；\n- 最可信主张判断（25 分）：是否选择 C1/C3 等有强证据支持的主张，理由是否引用了原文数据；\n- 最存疑主张判断（25 分）：是否识别出 C4 的外推风险或 C2 的适用范围限制，理由是否合理；\n- 复现关键细节（25 分）：是否提到 p_h=0.1、p_s=0.15、跨度长度 2-5、BERT-base 等具体配置。"
     }
   ]
 }

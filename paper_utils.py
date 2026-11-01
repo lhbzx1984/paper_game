@@ -229,6 +229,88 @@ def quote_in_text(quote: str, normalized_text: str) -> bool:
     return q in normalized_text
 
 
+def _build_normalized_map(text: str) -> tuple[str, list[int]]:
+    """返回 (normalized_text, original_index_for_each_normalized_char)。"""
+    result_chars: list[str] = []
+    result_index: list[int] = []
+    # 逐字处理，跟踪原始索引；normalize_for_match 的主要变换：
+    # - 合并空白为单个空格
+    # - 智能标点替换
+    # - 去软连字符、合并跨行连字符
+    i = 0
+    n = len(text)
+    pending_space = False
+    while i < n:
+        ch = text[i]
+        # 软连字符直接删除
+        if ch == "\u00ad":
+            i += 1
+            continue
+        # 跨行连字符: "-" + 空白换行 -> 合并为 "-"
+        if ch == "-" and i + 1 < n and text[i + 1] in " \t\n\r":
+            # 跳过后续空白
+            j = i + 1
+            while j < n and text[j] in " \t\n\r":
+                j += 1
+            result_chars.append("-")
+            result_index.append(i)
+            i = j
+            continue
+        # 空白折叠
+        if ch in " \t\n\r":
+            if result_chars and not pending_space:
+                pending_space = True
+            i += 1
+            continue
+        if pending_space:
+            result_chars.append(" ")
+            result_index.append(i - 1)
+            pending_space = False
+        # 标点替换
+        if ch in "–—−":
+            result_chars.append("-")
+            result_index.append(i)
+        elif ch in "“”":
+            result_chars.append('"')
+            result_index.append(i)
+        elif ch in "‘’":
+            result_chars.append("'")
+            result_index.append(i)
+        else:
+            result_chars.append(ch.lower())
+            result_index.append(i)
+        i += 1
+    return "".join(result_chars), result_index
+
+
+def locate_quote(text: str, quote: str) -> tuple[int, int] | None:
+    """在原文中定位 quote 的字符偏移区间 [start, end)。
+
+    使用与 quote_in_text 相同的归一化策略，保证定位结果与核验结果一致。
+    找不到时返回 None。
+    """
+    q = normalize_for_match(quote)
+    if not q or len(q) < 12:
+        return None
+    if len(q) > 420:
+        q = q[:320]
+    normalized, idx_map = _build_normalized_map(text)
+    pos = normalized.find(q)
+    if pos < 0:
+        return None
+    start = idx_map[pos]
+    end_pos = pos + len(q) - 1
+    if end_pos >= len(idx_map):
+        end_pos = len(idx_map) - 1
+    end = idx_map[end_pos] + 1
+    # 安全边界
+    if start < 0:
+        start = 0
+    if end > len(text):
+        end = len(text)
+    return (start, end)
+
+
 def verify_quotes(obj: Any, full_text: str) -> dict[str, int]:
     normalized = normalize_for_match(full_text)
     stats = {"total": 0, "verified": 0}
@@ -294,6 +376,7 @@ def normalize_case(raw: Any, full_text: str, fallback_title: str = "") -> dict[s
         raise ValueError("案件档案缺少 paper 字段")
 
     title = str(paper.get("title") or fallback_title or "Untitled paper").strip()
+    domain = str(paper.get("domain") or "AI").strip()
     method_raw = paper.get("method") if isinstance(paper.get("method"), dict) else {}
     claims_raw = paper.get("claims") if isinstance(paper.get("claims"), list) else []
     results_raw = paper.get("results") if isinstance(paper.get("results"), list) else []
@@ -308,6 +391,7 @@ def normalize_case(raw: Any, full_text: str, fallback_title: str = "") -> dict[s
         quote = str(claim.get("evidence_quote") or "").strip()
         if not text or not quote:
             continue
+        attacks_raw = claim.get("attacks") if isinstance(claim.get("attacks"), list) else []
         claims.append(
             {
                 "id": str(claim.get("id") or f"C{idx}"),
@@ -315,6 +399,9 @@ def normalize_case(raw: Any, full_text: str, fallback_title: str = "") -> dict[s
                 "evidence_quote": quote,
                 "section": str(claim.get("section") or "正文"),
                 "support": str(claim.get("support") or "partial"),
+                "concept_keywords": str(claim.get("concept_keywords") or "").strip(),
+                "attacks": _string_list(attacks_raw, 4),
+                "author_defense": str(claim.get("author_defense") or "论文未报告").strip(),
             }
         )
 
@@ -367,6 +454,7 @@ def normalize_case(raw: Any, full_text: str, fallback_title: str = "") -> dict[s
         "schema_version": "1.0",
         "paper": {
             "title": title,
+            "domain": domain,
             "authors": str(paper.get("authors") or "论文未报告").strip(),
             "year": str(paper.get("year") or "论文未报告").strip(),
             "venue": str(paper.get("venue") or "论文未报告").strip(),
@@ -406,6 +494,7 @@ def _normalize_options(value: Any, min_count: int = 3) -> list[str]:
 
 
 def normalize_levels(raw: Any, full_text: str) -> dict[str, Any]:
+    """归一化论文庭审 4 关卡结构：discovery / evidence_chain / cross_examination / verdict。"""
     if not isinstance(raw, dict) or not isinstance(raw.get("levels"), list):
         raise ValueError("模型返回的关卡格式不正确")
     levels_raw = raw["levels"]
@@ -416,8 +505,7 @@ def normalize_levels(raw: Any, full_text: str) -> dict[str, Any]:
     for idx, level in enumerate(levels_raw, start=1):
         if not isinstance(level, dict):
             raise ValueError(f"第 {idx} 关不是对象")
-        ltype = str(level.get("type") or "single_choice").strip()
-        source_quote = str(level.get("source_quote") or "").strip()
+        ltype = str(level.get("type") or "").strip()
         base = {
             "id": str(level.get("id") or f"level-{idx}"),
             "type": ltype,
@@ -426,65 +514,148 @@ def normalize_levels(raw: Any, full_text: str) -> dict[str, Any]:
             "skill": str(level.get("skill") or "论文理解").strip(),
             "points": _as_int(level.get("points"), 25) or 25,
             "objective": str(level.get("objective") or "").strip(),
-            "prompt": str(level.get("prompt") or "").strip(),
-            "source_section": str(level.get("source_section") or "正文").strip(),
-            "source_quote": source_quote,
-            "explanation": str(level.get("explanation") or "").strip(),
-            "hint": str(level.get("hint") or "").strip(),
         }
-        if not base["prompt"] or not base["explanation"]:
-            raise ValueError(f"第 {idx} 关缺少题干或解析")
 
-        if ltype == "assembly":
-            categories_raw = level.get("categories")
-            if not isinstance(categories_raw, list) or len(categories_raw) < 3:
-                raise ValueError(f"第 {idx} 关的装配类别不足")
-            categories = []
-            for cat in categories_raw[:5]:
-                if not isinstance(cat, dict):
-                    raise ValueError(f"第 {idx} 关的装配类别格式错误")
-                options = _normalize_options(cat.get("options"), 3)
-                answer = _as_int(cat.get("answer_index"), -1)
-                if answer < 0 or answer >= len(options):
-                    raise ValueError(f"第 {idx} 关「{cat.get('name', '未命名')}」答案越界")
-                categories.append(
+        if ltype == "discovery":
+            claims_raw = level.get("claims")
+            if not isinstance(claims_raw, list) or len(claims_raw) < 1:
+                raise ValueError(f"第 {idx} 关（证据开示）缺少 claims")
+            claims = []
+            for ci, c in enumerate(claims_raw, start=1):
+                if not isinstance(c, dict):
+                    continue
+                text = str(c.get("text") or "").strip()
+                quote = str(c.get("evidence_quote") or "").strip()
+                if not text or not quote:
+                    continue
+                claims.append(
                     {
-                        "name": str(cat.get("name") or "配置").strip(),
-                        "options": options,
-                        "answer_index": answer,
+                        "id": str(c.get("id") or f"C{ci}"),
+                        "text": text,
+                        "section": str(c.get("section") or "正文").strip(),
+                        "hint": str(c.get("hint") or "").strip(),
+                        "evidence_quote": quote,
                     }
                 )
-            base["categories"] = categories
-        elif ltype == "review":
-            options = _normalize_options(level.get("options"), 3)
-            answer = _as_int(level.get("answer_index"), -1)
-            if answer < 0 or answer >= len(options):
-                raise ValueError(f"第 {idx} 关答案越界")
-            followup_raw = level.get("followup")
-            if not isinstance(followup_raw, dict):
-                raise ValueError(f"第 {idx} 关缺少作者回应环节")
-            follow_options = _normalize_options(followup_raw.get("options"), 3)
-            follow_answer = _as_int(followup_raw.get("answer_index"), -1)
-            if follow_answer < 0 or follow_answer >= len(follow_options):
-                raise ValueError(f"第 {idx} 关追问答案越界")
-            base["options"] = options
-            base["answer_index"] = answer
-            base["followup"] = {
-                "author_response": str(followup_raw.get("author_response") or "").strip(),
-                "prompt": str(followup_raw.get("prompt") or "作者回应后，哪种追问最专业？").strip(),
-                "source_quote": str(followup_raw.get("source_quote") or "").strip(),
-                "options": follow_options,
-                "answer_index": follow_answer,
-                "explanation": str(followup_raw.get("explanation") or "").strip(),
-            }
+            if not claims:
+                raise ValueError(f"第 {idx} 关（证据开示）没有有效的 claim")
+            base["claims"] = claims
+
+        elif ltype == "evidence_chain":
+            cards_raw = level.get("cards")
+            correct_order = level.get("correct_order")
+            if not isinstance(cards_raw, list) or len(cards_raw) < 3:
+                raise ValueError(f"第 {idx} 关（证据链）卡片不足")
+            cards = []
+            for ci, c in enumerate(cards_raw):
+                if not isinstance(c, dict):
+                    continue
+                text = str(c.get("text") or "").strip()
+                quote = str(c.get("quote") or "").strip()
+                if not text:
+                    continue
+                cards.append(
+                    {
+                        "id": _as_int(c.get("id"), ci),
+                        "text": text,
+                        "quote": quote,
+                    }
+                )
+            if len(cards) < 3:
+                raise ValueError(f"第 {idx} 关（证据链）有效卡片不足")
+            order = []
+            if isinstance(correct_order, list):
+                for v in correct_order:
+                    iv = _as_int(v, -1)
+                    if 0 <= iv < len(cards):
+                        order.append(iv)
+            # 顺序去重、补全
+            seen = set()
+            final_order = []
+            for v in order:
+                if v not in seen:
+                    seen.add(v)
+                    final_order.append(v)
+            for v in range(len(cards)):
+                if v not in seen:
+                    final_order.append(v)
+            base["claim_text"] = str(level.get("claim_text") or "").strip()
+            base["cards"] = cards
+            base["correct_order"] = final_order
+            base["explanation"] = str(level.get("explanation") or "").strip()
+
+        elif ltype == "cross_examination":
+            trials_raw = level.get("trials")
+            if not isinstance(trials_raw, list) or len(trials_raw) < 1:
+                raise ValueError(f"第 {idx} 关（庭审质证）缺少 trials")
+            trials = []
+            for ti, t in enumerate(trials_raw, start=1):
+                if not isinstance(t, dict):
+                    continue
+                claim_text = str(t.get("claim_text") or "").strip()
+                if not claim_text:
+                    continue
+                cand_raw = t.get("evidence_candidates")
+                candidates = []
+                if isinstance(cand_raw, list):
+                    for ei, e in enumerate(cand_raw, start=1):
+                        if not isinstance(e, dict):
+                            continue
+                        quote = str(e.get("quote") or "").strip()
+                        if not quote:
+                            continue
+                        candidates.append(
+                            {
+                                "id": str(e.get("id") or f"E{ei}"),
+                                "quote": quote,
+                                "label": str(e.get("label") or "").strip(),
+                            }
+                        )
+                ruling_options = _string_list(t.get("ruling_options"), 3) or ["成立", "存疑", "不成立"]
+                correct_ruling = str(t.get("correct_ruling") or "").strip()
+                if correct_ruling not in ruling_options:
+                    correct_ruling = ruling_options[0] if ruling_options else "存疑"
+                trials.append(
+                    {
+                        "claim_id": str(t.get("claim_id") or f"T{ti}"),
+                        "claim_text": claim_text,
+                        "attack": str(t.get("attack") or "").strip(),
+                        "defense": str(t.get("defense") or "").strip(),
+                        "ruling_options": ruling_options,
+                        "correct_ruling": correct_ruling,
+                        "evidence_candidates": candidates,
+                        "correct_evidence_id": str(t.get("correct_evidence_id") or "").strip(),
+                        "explanation": str(t.get("explanation") or "").strip(),
+                    }
+                )
+            if not trials:
+                raise ValueError(f"第 {idx} 关（庭审质证）没有有效的 trial")
+            base["trials"] = trials
+
+        elif ltype == "verdict":
+            claims_summary_raw = level.get("claims_summary")
+            claims_summary = []
+            if isinstance(claims_summary_raw, list):
+                for c in claims_summary_raw:
+                    if not isinstance(c, dict):
+                        continue
+                    text = str(c.get("text") or "").strip()
+                    support = str(c.get("true_support") or c.get("support") or "").strip()
+                    if not text:
+                        continue
+                    claims_summary.append(
+                        {
+                            "id": str(c.get("id") or "").strip(),
+                            "text": text,
+                            "true_support": support,
+                        }
+                    )
+            base["claims_summary"] = claims_summary
+            base["prompt"] = str(level.get("prompt") or "").strip()
+            base["rubric"] = str(level.get("rubric") or "").strip()
+
         else:
-            options = _normalize_options(level.get("options"), 3)
-            answer = _as_int(level.get("answer_index"), -1)
-            if answer < 0 or answer >= len(options):
-                raise ValueError(f"第 {idx} 关答案越界")
-            base["type"] = "single_choice"
-            base["options"] = options
-            base["answer_index"] = answer
+            raise ValueError(f"第 {idx} 关的未知类型: {ltype!r}")
 
         levels.append(base)
 

@@ -266,6 +266,69 @@ async function apiFetch(url, options = {}, timeoutMs = 240000) {
 }
 
 function initializeLevelState(level) {
+  if (level.type === "discovery") {
+    const claims = Array.isArray(level.claims) ? level.claims : [];
+    return {
+      hintUsed: false,
+      hintFree: false,
+      resolved: false,
+      quality: null,
+      attempts: 0,
+      // 每条 claim 的查找结果
+      claimStates: claims.map(() => ({ found: false, attempts: 0, imageUrl: null, imageLoading: false })),
+      currentClaimIndex: 0,
+    };
+  }
+  if (level.type === "evidence_chain") {
+    const cards = Array.isArray(level.cards) ? level.cards : [];
+    // 初始顺序：打乱
+    const order = cards.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    return {
+      hintUsed: false,
+      hintFree: false,
+      resolved: false,
+      quality: null,
+      attempts: 0,
+      order,
+      draggedIndex: null,
+    };
+  }
+  if (level.type === "cross_examination") {
+    const trials = Array.isArray(level.trials) ? level.trials : [];
+    return {
+      hintUsed: false,
+      hintFree: false,
+      resolved: false,
+      quality: null,
+      attempts: 0,
+      currentTrialIndex: 0,
+      trialStates: trials.map(() => ({
+        rulingSelected: null,
+        evidenceSelected: null,
+        submitted: false,
+        correct: false,
+      })),
+    };
+  }
+  if (level.type === "verdict") {
+    return {
+      hintUsed: false,
+      hintFree: false,
+      resolved: false,
+      quality: null,
+      attempts: 0,
+      verdictText: "",
+      scoring: false,
+      score: null,
+      posterUrl: null,
+      posterLoading: false,
+    };
+  }
+  // 兼容旧类型
   if (level.type === "review") {
     return {
       hintUsed: false,
@@ -306,6 +369,20 @@ function initializeLevelState(level) {
 
 function isLevelComplete(level, levelState) {
   if (!level || !levelState) return false;
+  if (level.type === "discovery") {
+    const claims = Array.isArray(level.claims) ? level.claims : [];
+    return claims.length > 0 && (levelState.claimStates || []).every((s) => s.found);
+  }
+  if (level.type === "evidence_chain") {
+    return Boolean(levelState.resolved);
+  }
+  if (level.type === "cross_examination") {
+    const trials = Array.isArray(level.trials) ? level.trials : [];
+    return trials.length > 0 && (levelState.trialStates || []).every((s) => s.submitted);
+  }
+  if (level.type === "verdict") {
+    return Boolean(levelState.score);
+  }
   if (level.type === "review") {
     return Boolean(levelState.mainResolved && levelState.followupResolved);
   }
@@ -322,11 +399,38 @@ function scoreForQuality(base, quality) {
 function levelScore(level, levelState) {
   if (!level || !levelState) return 0;
   let points = 0;
-  if (level.type === "review") {
+  if (level.type === "discovery") {
+    const claims = Array.isArray(level.claims) ? level.claims : [];
+    const perClaim = Math.round((level.points || 25) / Math.max(1, claims.length));
+    (levelState.claimStates || []).forEach((s) => {
+      if (s.found) {
+        const q = s.attempts <= 1 ? "first" : s.attempts <= 3 ? "retry" : "revealed";
+        points += scoreForQuality(perClaim, q);
+      }
+    });
+  } else if (level.type === "evidence_chain") {
+    if (levelState.resolved) {
+      points = scoreForQuality(level.points || 25, levelState.quality);
+    }
+  } else if (level.type === "cross_examination") {
+    const trials = Array.isArray(level.trials) ? level.trials : [];
+    const perTrial = Math.round((level.points || 25) / Math.max(1, trials.length));
+    (levelState.trialStates || []).forEach((s) => {
+      if (s.submitted && s.correct) {
+        points += perTrial;
+      } else if (s.submitted) {
+        points += Math.round(perTrial * 0.4);
+      }
+    });
+  } else if (level.type === "verdict") {
+    if (levelState.score && typeof levelState.score.total === "number") {
+      points = Math.round((levelState.score.total / 100) * (level.points || 25));
+    }
+  } else if (level.type === "review") {
     if (levelState.mainResolved) points += scoreForQuality(15, levelState.mainQuality);
     if (levelState.followupResolved) points += scoreForQuality(10, levelState.followupQuality);
   } else if (levelState.resolved) {
-    points = scoreForQuality(25, levelState.quality);
+    points = scoreForQuality(level.points || 25, levelState.quality);
   }
   if (points > 0 && levelState.hintUsed && !levelState.hintFree) points = Math.max(0, points - 3);
   return points;
@@ -341,6 +445,17 @@ function qualityLabel(quality) {
 
 function levelResultStatus(level, levelState) {
   if (!isLevelComplete(level, levelState)) return { label: "未完成", className: "warn" };
+  if (level.type === "verdict") {
+    const total = levelState.score?.total ?? 0;
+    if (total >= 80) return { label: `裁决 ${total} 分`, className: "" };
+    if (total >= 50) return { label: `裁决 ${total} 分`, className: "warn" };
+    return { label: `裁决 ${total} 分`, className: "warn" };
+  }
+  if (level.type === "cross_examination") {
+    const trials = Array.isArray(level.trials) ? level.trials : [];
+    const correct = (levelState.trialStates || []).filter((s) => s.correct).length;
+    return { label: `${correct}/${trials.length} 裁定正确`, className: correct === trials.length ? "" : "warn" };
+  }
   const qualities = level.type === "review"
     ? [levelState.mainQuality, levelState.followupQuality]
     : [levelState.quality];
@@ -2089,21 +2204,301 @@ function reviewLevelHtml(level, levelState) {
   return mainPart + rebuttal;
 }
 
+/* ---------- 论文庭审：L1 证据开示 ---------- */
+
+function discoveryLevelHtml(level, levelState) {
+  const claims = Array.isArray(level.claims) ? level.claims : [];
+  const claimStates = levelState.claimStates || [];
+  const cur = Math.min(levelState.currentClaimIndex || 0, claims.length - 1);
+  const claim = claims[cur];
+  const cs = claimStates[cur];
+  if (!claim) return `<p class="empty-hint">暂无证据需要开示。</p>`;
+
+  const foundCount = claimStates.filter((s) => s.found).length;
+  const paperText = state.paperText || "";
+
+  // 找到的 claim 可以展开看原文定位
+  const claimsList = claims.map((c, i) => {
+    const st = claimStates[i] || { found: false };
+    return `
+      <div class="disc-claim-item ${st.found ? "found" : ""} ${i === cur ? "active" : ""}" data-action="disc-switch-claim" data-index="${i}">
+        <span class="disc-claim-num">${i + 1}</span>
+        <div class="disc-claim-body">
+          <div class="disc-claim-text">${escapeHtml(c.text)}</div>
+          <div class="disc-claim-meta">${escapeHtml(c.section || "正文")}${st.found ? " · 已定位" : ""}</div>
+        </div>
+        <span class="disc-claim-check">${st.found ? "✓" : ""}</span>
+      </div>
+    `;
+  }).join("");
+
+  const foundPanel = cs.found ? `
+    <div class="disc-found-panel">
+      <div class="disc-found-label">✓ 证据已定位 · 原文如下</div>
+      <blockquote class="disc-quote">${escapeHtml(claim.evidence_quote)}</blockquote>
+      ${cs.imageUrl ? `
+        <div class="disc-image-wrap">
+          <div class="disc-image-label">概念可视化</div>
+          <img class="disc-image" src="${escapeHtml(cs.imageUrl)}" alt="concept visualization" />
+        </div>
+      ` : cs.imageLoading ? `
+        <div class="disc-image-loading">正在生成概念可视化…</div>
+      ` : `
+        <button class="btn btn-light btn-sm" data-action="disc-gen-image" data-index="${cur}">生成概念可视化图</button>
+      `}
+    </div>
+  ` : `
+    <div class="disc-search-panel">
+      <div class="disc-search-hint">${escapeHtml(claim.hint || "在论文中找到支持该主张的原文。")}</div>
+      <div class="disc-paper" id="disc-paper" contenteditable="false">${escapeHtml(paperText)}</div>
+      <div class="disc-actions">
+        <button class="btn btn-accent" data-action="disc-submit" data-index="${cur}">提交所选文本</button>
+        <span class="disc-selection-hint">在上方论文中选中你认为是证据的句子，再点提交。</span>
+      </div>
+      ${cs.attempts > 0 ? `<div class="disc-feedback warn">未匹配到正确证据，已尝试 ${cs.attempts} 次。提示：注意「${escapeHtml(claim.section)}」一节。</div>` : ""}
+    </div>
+  `;
+
+  const allDone = foundCount === claims.length;
+  return `
+    <div class="discovery-layout">
+      <div class="disc-claims-list">
+        <div class="disc-list-title">主张清单（${foundCount}/${claims.length}）</div>
+        ${claimsList}
+      </div>
+      <div class="disc-workspace">
+        <div class="disc-current-claim">
+          <span class="disc-current-badge">主张 ${cur + 1}</span>
+          <p>${escapeHtml(claim.text)}</p>
+        </div>
+        ${foundPanel}
+      </div>
+    </div>
+    ${allDone ? `
+      <div class="level-complete-banner">
+        <strong>证据开示完成</strong> · 全部 ${claims.length} 条主张的证据均已定位。
+        <button class="btn btn-accent btn-sm" data-action="next-level">进入下一关 →</button>
+      </div>
+    ` : ""}
+  `;
+}
+
+/* ---------- 论文庭审：L2 证据链拼图 ---------- */
+
+function evidenceChainLevelHtml(level, levelState) {
+  const cards = Array.isArray(level.cards) ? level.cards : [];
+  const order = levelState.order || cards.map((_, i) => i);
+  const resolved = levelState.resolved;
+
+  const cardsHtml = order.map((cardIdx, pos) => {
+    const card = cards[cardIdx];
+    if (!card) return "";
+    const isCorrect = resolved && levelState.correct_order && levelState.correct_order[pos] === cardIdx;
+    const isWrong = resolved && levelState.correct_order && levelState.correct_order[pos] !== cardIdx;
+    return `
+      <div class="chain-card ${isCorrect ? "correct" : ""} ${isWrong ? "wrong" : ""}" draggable="${!resolved}" data-action="chain-drag" data-pos="${pos}" data-card="${cardIdx}">
+        <span class="chain-pos">${pos + 1}</span>
+        <div class="chain-card-body">
+          <div class="chain-card-text">${escapeHtml(card.text)}</div>
+          ${card.quote ? `<blockquote class="chain-card-quote">${escapeHtml(card.quote)}</blockquote>` : ""}
+        </div>
+        <span class="chain-drag-handle">⋮⋮</span>
+      </div>
+    `;
+  }).join("");
+
+  const feedback = resolved ? `
+    <div class="chain-feedback ${levelState.quality === "first" ? "good" : levelState.quality === "retry" ? "warn" : ""}">
+      ${levelState.quality === "first" ? "一次排对！逻辑链完整。" : levelState.quality === "retry" ? "排序正确。" : "已显示正确顺序。"}
+      ${level.explanation ? `<p class="chain-explanation">${escapeHtml(level.explanation)}</p>` : ""}
+    </div>
+  ` : "";
+
+  return `
+    <div class="chain-claim">${escapeHtml(level.claim_text || "")}</div>
+    <div class="chain-cards" id="chain-cards">${cardsHtml}</div>
+    <div class="chain-actions">
+      <button class="btn btn-accent" data-action="chain-submit" ${resolved ? "disabled" : ""}>提交排序</button>
+      <button class="btn btn-light btn-sm" data-action="chain-reveal" ${resolved ? "disabled" : ""}>查看正确顺序</button>
+    </div>
+    ${feedback}
+  `;
+}
+
+/* ---------- 论文庭审：L3 庭审质证 ---------- */
+
+function crossExaminationLevelHtml(level, levelState) {
+  const trials = Array.isArray(level.trials) ? level.trials : [];
+  const cur = Math.min(levelState.currentTrialIndex || 0, trials.length - 1);
+  const trial = trials[cur];
+  const ts = (levelState.trialStates || [])[cur];
+  if (!trial) return `<p class="empty-hint">暂无质证环节。</p>`;
+
+  const trialsNav = trials.map((t, i) => {
+    const s = (levelState.trialStates || [])[i];
+    const done = s?.submitted;
+    return `
+      <button class="trial-nav-item ${done ? "done" : ""} ${i === cur ? "active" : ""}" data-action="trial-switch" data-index="${i}">
+        <span class="trial-nav-num">${i + 1}</span>
+        <span class="trial-nav-label">${done ? (s.correct ? "✓" : "部分") : "待审"}</span>
+      </button>
+    `;
+  }).join("");
+
+  const rulingButtons = trial.ruling_options.map((opt, i) => {
+    const selected = ts?.rulingSelected === opt;
+    const showCorrect = ts?.submitted;
+    const isCorrect = opt === trial.correct_ruling;
+    let cls = "ruling-btn";
+    if (showCorrect && isCorrect) cls += " correct";
+    else if (selected && !isCorrect && showCorrect) cls += " wrong";
+    else if (selected) cls += " selected";
+    else if (showCorrect) cls += " dimmed";
+    return `<button class="${cls}" data-action="trial-select-ruling" data-ruling="${escapeHtml(opt)}" ${showCorrect ? "disabled" : ""}>${escapeHtml(opt)}</button>`;
+  }).join("");
+
+  const evidenceButtons = (trial.evidence_candidates || []).map((e) => {
+    const selected = ts?.evidenceSelected === e.id;
+    const showCorrect = ts?.submitted;
+    const isCorrect = e.id === trial.correct_evidence_id;
+    let cls = "evidence-cand";
+    if (showCorrect && isCorrect) cls += " correct";
+    else if (selected && !isCorrect && showCorrect) cls += " wrong";
+    else if (selected) cls += " selected";
+    else if (showCorrect) cls += " dimmed";
+    return `
+      <button class="${cls}" data-action="trial-select-evidence" data-id="${escapeHtml(e.id)}" ${showCorrect ? "disabled" : ""}>
+        ${e.label ? `<span class="ev-label">${escapeHtml(e.label)}</span>` : ""}
+        <span class="ev-quote">“${escapeHtml(e.quote)}”</span>
+      </button>
+    `;
+  }).join("");
+
+  const feedback = ts?.submitted ? `
+    <div class="trial-feedback ${ts.correct ? "good" : "warn"}">
+      ${ts.correct ? "裁定与证据选择正确！" : "裁定或证据选择有误。"}
+      ${trial.explanation ? `<p class="trial-explanation">${escapeHtml(trial.explanation)}</p>` : ""}
+    </div>
+  ` : "";
+
+  const allDone = (levelState.trialStates || []).every((s) => s.submitted);
+  return `
+    <div class="trial-nav">${trialsNav}</div>
+    <div class="trial-claim"><strong>主张：</strong>${escapeHtml(trial.claim_text)}</div>
+    <div class="trial-debate">
+      <div class="trial-side trial-attack">
+        <div class="trial-side-label">⚔ 挑战者质疑</div>
+        <p>${escapeHtml(trial.attack)}</p>
+      </div>
+      <div class="trial-side trial-defense">
+        <div class="trial-side-label">🛡 作者辩护</div>
+        <p>${escapeHtml(trial.defense)}</p>
+      </div>
+    </div>
+    <div class="trial-section">
+      <div class="trial-section-label">你的裁定</div>
+      <div class="ruling-options">${rulingButtons}</div>
+    </div>
+    <div class="trial-section">
+      <div class="trial-section-label">选择支持裁定的证据</div>
+      <div class="evidence-candidates">${evidenceButtons}</div>
+    </div>
+    <div class="trial-actions">
+      <button class="btn btn-accent" data-action="trial-submit" ${ts?.submitted ? "disabled" : ""}>提交裁定</button>
+    </div>
+    ${feedback}
+    ${allDone ? `
+      <div class="level-complete-banner">
+        <strong>庭审质证完成</strong>
+        <button class="btn btn-accent btn-sm" data-action="next-level">进入最终裁决 →</button>
+      </div>
+    ` : ""}
+  `;
+}
+
+/* ---------- 论文庭审：L4 陪审团裁决 ---------- */
+
+function verdictLevelHtml(level, levelState) {
+  const score = levelState.score;
+  const poster = levelState.posterUrl;
+  const paper = state.caseData?.paper || {};
+
+  const claimsSummary = (level.claims_summary || []).map((c) => `
+    <li><strong>${escapeHtml(c.id || "")}</strong> ${escapeHtml(c.text)} <span class="verdict-support">${escapeHtml(c.true_support || "")}</span></li>
+  `).join("");
+
+  if (score) {
+    const s = score.scores || {};
+    return `
+      <div class="verdict-result">
+        <div class="verdict-score-ring">
+          <svg viewBox="0 0 120 120" class="score-ring">
+            <circle cx="60" cy="60" r="52" class="ring-bg"/>
+            <circle cx="60" cy="60" r="52" class="ring-fg" stroke-dasharray="${(score.total / 100) * 326.7} 326.7"/>
+          </svg>
+          <div class="score-ring-text"><strong>${score.total}</strong><span>/ 100</span></div>
+        </div>
+        <div class="verdict-score-breakdown">
+          <div class="score-row"><span>核心贡献</span><span>${s.contribution || 0}/25</span></div>
+          <div class="score-row"><span>最可信主张</span><span>${s.credible_claim || 0}/25</span></div>
+          <div class="score-row"><span>最存疑主张</span><span>${s.doubtful_claim || 0}/25</span></div>
+          <div class="score-row"><span>复现细节</span><span>${s.reproduction_detail || 0}/25</span></div>
+        </div>
+        <div class="verdict-feedback"><p>${escapeHtml(score.feedback || "")}</p></div>
+        ${poster ? `
+          <div class="verdict-poster">
+            <img src="${escapeHtml(poster)}" alt="verdict poster" />
+            <a class="btn btn-light btn-sm" href="${escapeHtml(poster)}" download="paperquest-verdict.png">下载裁决海报</a>
+          </div>
+        ` : `
+          <button class="btn btn-accent" data-action="verdict-gen-poster" ${levelState.posterLoading ? "disabled" : ""}>
+            ${levelState.posterLoading ? "生成中…" : "生成裁决海报（16:9）"}
+          </button>
+        `}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="verdict-claims-summary">
+      <div class="verdict-summary-title">案件主张一览（用于你的裁决参考）</div>
+      <ul>${claimsSummary}</ul>
+    </div>
+    <div class="verdict-prompt">${escapeHtml(level.prompt || "")}</div>
+    ${level.rubric ? `<details class="verdict-rubric"><summary>评分标准</summary><p>${escapeHtml(level.rubric)}</p></details>` : ""}
+    <textarea class="verdict-textarea" id="verdict-textarea" data-action="verdict-input" placeholder="在此写下你的最终裁决…" rows="10">${escapeHtml(levelState.verdictText || "")}</textarea>
+    <div class="verdict-actions">
+      <button class="btn btn-accent" data-action="verdict-submit" ${levelState.scoring ? "disabled" : ""}>
+        ${levelState.scoring ? "AI 评审中…" : "提交裁决并评分"}
+      </button>
+      <span class="verdict-count">${(levelState.verdictText || "").length} 字</span>
+    </div>
+  `;
+}
+
 function levelCardHtml(level, levelState) {
   let body = "";
-  if (level.type === "assembly") body = assemblyLevelHtml(level, levelState);
+  if (level.type === "discovery") body = discoveryLevelHtml(level, levelState);
+  else if (level.type === "evidence_chain") body = evidenceChainLevelHtml(level, levelState);
+  else if (level.type === "cross_examination") body = crossExaminationLevelHtml(level, levelState);
+  else if (level.type === "verdict") body = verdictLevelHtml(level, levelState);
+  else if (level.type === "assembly") body = assemblyLevelHtml(level, levelState);
   else if (level.type === "review") body = reviewLevelHtml(level, levelState);
   else body = choiceLevelHtml(level, levelState);
+
+  const isTrialType = ["discovery", "evidence_chain", "cross_examination", "verdict"].includes(level.type);
+  const promptLine = level.prompt ? `<p class="prompt">${escapeHtml(level.prompt)}</p>` : "";
+  const pointsLabel = level.type === "review" ? "15 + 10" : String(level.points || 25);
   return `
-    <article class="level-card">
+    <article class="level-card ${isTrialType ? "trial-level" : ""}">
       <div class="level-kicker">${escapeHtml(levelKicker(level, state.currentLevel))}</div>
       <h1 class="level-title">${escapeHtml(level.title || "论文调查")}</h1>
       <p class="level-objective">${escapeHtml(level.objective || "")}</p>
-      <p class="prompt">${escapeHtml(level.prompt || "")}</p>
+      ${promptLine}
       <div class="game-meta">
         <span class="meta-pill">技能 · ${escapeHtml(level.skill || "论文理解")}</span>
-        <span class="meta-pill">本题 ${level.type === "review" ? "15 + 10" : "25"} 分</span>
-        <span class="meta-pill">依据 · ${escapeHtml(sectionLabel(level.source_section))}</span>
+        <span class="meta-pill">本题 ${pointsLabel} 分</span>
+        ${level.source_section ? `<span class="meta-pill">依据 · ${escapeHtml(sectionLabel(level.source_section))}</span>` : ""}
         ${level.verified === true ? `<span class="meta-pill">引文已核验</span>` : ""}
       </div>
       ${hintAreaHtml(level, levelState)}
@@ -2112,7 +2507,7 @@ function levelCardHtml(level, levelState) {
   `;
 }
 
-const LEVEL_STEP_LABELS = ["缺口", "装配", "结果", "审稿"];
+const LEVEL_STEP_LABELS = ["开示", "拼图", "质证", "裁决"];
 
 function gameProgressHtml() {
   return state.levels.map((level, index) => {
@@ -3930,9 +4325,287 @@ async function dispatchAction(actionEl) {
       state.screen = "home";
       render();
       break;
+    /* ---------- 论文庭审新关卡 ---------- */
+    case "disc-switch-claim": {
+      const index = Number(actionEl.dataset.index);
+      if (Number.isInteger(index)) discSwitchClaim(index);
+      break;
+    }
+    case "disc-submit": {
+      const index = Number(actionEl.dataset.index);
+      if (Number.isInteger(index)) await discSubmit(index);
+      break;
+    }
+    case "disc-gen-image": {
+      const index = Number(actionEl.dataset.index);
+      if (Number.isInteger(index)) await discGenImage(index);
+      break;
+    }
+    case "chain-submit":
+      chainSubmit();
+      break;
+    case "chain-reveal":
+      chainReveal();
+      break;
+    case "trial-switch": {
+      const index = Number(actionEl.dataset.index);
+      if (Number.isInteger(index)) trialSwitch(index);
+      break;
+    }
+    case "trial-select-ruling":
+      trialSelectRuling(actionEl.dataset.ruling || "");
+      break;
+    case "trial-select-evidence":
+      trialSelectEvidence(actionEl.dataset.id || "");
+      break;
+    case "trial-submit":
+      trialSubmit();
+      break;
+    case "verdict-submit":
+      await verdictSubmit();
+      break;
+    case "verdict-gen-poster":
+      await verdictGenPoster();
+      break;
     default:
       break;
   }
+}
+
+/* ---------- 论文庭审：L1 证据开示 处理函数 ---------- */
+
+function discSwitchClaim(index) {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState || level.type !== "discovery") return;
+  levelState.currentClaimIndex = index;
+  render();
+}
+
+async function discSubmit(index) {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState || level.type !== "discovery") return;
+  const claim = level.claims?.[index];
+  const cs = levelState.claimStates?.[index];
+  if (!claim || !cs || cs.found) return;
+
+  // 获取用户在论文区选中的文本
+  const selection = window.getSelection();
+  let selectedText = "";
+  if (selection && selection.toString().trim()) {
+    selectedText = selection.toString();
+  } else {
+    // 回退：检查 disc-paper 内的选区
+    const paperEl = document.getElementById("disc-paper");
+    if (paperEl) {
+      const sel = window.getSelection();
+      if (sel && paperEl.contains(sel.anchorNode)) {
+        selectedText = sel.toString();
+      }
+    }
+  }
+  if (!selectedText.trim()) {
+    showToast("请先在论文中选中你认为是证据的文本。", "warn");
+    return;
+  }
+
+  cs.attempts += 1;
+  try {
+    const data = await apiFetch("/api/check_quote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selection: selectedText, evidence_quote: claim.evidence_quote }),
+    });
+    if (data.match) {
+      cs.found = true;
+      showToast("✓ 证据定位成功！", "ok");
+      // 自动跳到下一条未完成的 claim
+      const nextIdx = (levelState.claimStates || []).findIndex((s, i) => !s.found);
+      if (nextIdx >= 0) levelState.currentClaimIndex = nextIdx;
+    } else {
+      showToast("所选文本不包含正确证据，再仔细找找。", "warn");
+    }
+  } catch (error) {
+    showToast(error?.message || "校验失败，请重试。", "warn");
+  }
+  scheduleProgressSave();
+  render();
+}
+
+async function discGenImage(index) {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState) return;
+  const claim = level.claims?.[index];
+  const cs = levelState.claimStates?.[index];
+  if (!claim || !cs) return;
+  const caseFile = state.caseData;
+  const domain = caseFile?.paper?.domain || "AI";
+  // 从案件档案中查找同 id 的 claim 以获取 concept_keywords
+  const caseClaim = (caseFile?.paper?.claims || []).find((c) => c.id === claim.id);
+  const kw = caseClaim?.concept_keywords || claim.text;
+  cs.imageLoading = true;
+  render();
+  try {
+    const prompt = `A clean conceptual illustration for an academic paper about ${domain}. Concept: ${kw}. Professional, educational, minimalist, no text, high quality.`;
+    const data = await apiFetch("/api/image/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, size: "1K", ratio: "1:1" }),
+    });
+    cs.imageUrl = data.url || null;
+  } catch (error) {
+    showToast(error?.message || "图像生成失败。", "warn");
+  } finally {
+    cs.imageLoading = false;
+  }
+  render();
+}
+
+/* ---------- 论文庭审：L2 证据链拼图 处理函数 ---------- */
+
+function chainSubmit() {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState || level.type !== "evidence_chain" || levelState.resolved) return;
+  const correct = level.correct_order || [];
+  const order = levelState.order || [];
+  const allCorrect = order.length === correct.length && order.every((v, i) => v === correct[i]);
+  levelState.attempts += 1;
+  if (allCorrect) {
+    levelState.resolved = true;
+    levelState.quality = levelState.attempts === 1 ? "first" : "retry";
+    levelState.correct_order = correct;
+  } else if (levelState.attempts >= 2) {
+    levelState.resolved = true;
+    levelState.quality = "revealed";
+    levelState.correct_order = correct;
+    levelState.order = correct.slice();
+  } else {
+    showToast("排序不正确，再想想逻辑链条：方法→实验→结果→主张。", "warn");
+  }
+  scheduleProgressSave();
+  render();
+}
+
+function chainReveal() {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState || level.type !== "evidence_chain" || levelState.resolved) return;
+  levelState.resolved = true;
+  levelState.quality = "revealed";
+  levelState.correct_order = level.correct_order || [];
+  levelState.order = (level.correct_order || []).slice();
+  scheduleProgressSave();
+  render();
+}
+
+/* ---------- 论文庭审：L3 庭审质证 处理函数 ---------- */
+
+function trialSwitch(index) {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState || level.type !== "cross_examination") return;
+  levelState.currentTrialIndex = index;
+  render();
+}
+
+function trialSelectRuling(ruling) {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState) return;
+  const ts = levelState.trialStates?.[levelState.currentTrialIndex];
+  if (!ts || ts.submitted) return;
+  ts.rulingSelected = ruling;
+  render();
+}
+
+function trialSelectEvidence(id) {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState) return;
+  const ts = levelState.trialStates?.[levelState.currentTrialIndex];
+  if (!ts || ts.submitted) return;
+  ts.evidenceSelected = id;
+  render();
+}
+
+function trialSubmit() {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState || level.type !== "cross_examination") return;
+  const trial = level.trials?.[levelState.currentTrialIndex];
+  const ts = levelState.trialStates?.[levelState.currentTrialIndex];
+  if (!trial || !ts || ts.submitted) return;
+  if (!ts.rulingSelected) {
+    showToast("请先选择裁定。", "warn");
+    return;
+  }
+  if (!ts.evidenceSelected) {
+    showToast("请选择一条支持裁定的证据。", "warn");
+    return;
+  }
+  const rulingCorrect = ts.rulingSelected === trial.correct_ruling;
+  const evidenceCorrect = ts.evidenceSelected === trial.correct_evidence_id;
+  ts.submitted = true;
+  ts.correct = rulingCorrect && evidenceCorrect;
+  scheduleProgressSave();
+  render();
+}
+
+/* ---------- 论文庭审：L4 陪审团裁决 处理函数 ---------- */
+
+async function verdictSubmit() {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState || level.type !== "verdict" || levelState.scoring || levelState.score) return;
+  const text = (levelState.verdictText || "").trim();
+  if (text.length < 20) {
+    showToast("裁决内容太短，请认真填写。", "warn");
+    return;
+  }
+  levelState.scoring = true;
+  render();
+  try {
+    const data = await apiFetch("/api/score_verdict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ case_file: state.caseData, verdict: text }),
+    });
+    levelState.score = data.score;
+  } catch (error) {
+    showToast(error?.message || "评分失败，请重试。", "warn");
+  } finally {
+    levelState.scoring = false;
+  }
+  scheduleProgressSave();
+  render();
+}
+
+async function verdictGenPoster() {
+  const level = state.levels[state.currentLevel];
+  const levelState = state.levelStates[state.currentLevel];
+  if (!level || !levelState || !levelState.score) return;
+  levelState.posterLoading = true;
+  render();
+  try {
+    const paper = state.caseData?.paper || {};
+    const total = levelState.score.total;
+    const title = paper.title || "论文裁决";
+    const prompt = `A cinematic 16:9 verdict poster for an academic paper trial game. Dark elegant courtroom background with golden scales of justice. Title text area at top: "${escapeHtml(title).substring(0, 60)}". Large score number ${total}/100 in center. Refined, premium, no extra text, dramatic lighting.`;
+    const data = await apiFetch("/api/image/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, size: "2K", ratio: "16:9" }),
+    });
+    levelState.posterUrl = data.url || null;
+  } catch (error) {
+    showToast(error?.message || "海报生成失败。", "warn");
+  } finally {
+    levelState.posterLoading = false;
+  }
+  render();
 }
 
 function bindEvents() {
@@ -3979,6 +4652,15 @@ function bindEvents() {
       state.reflection = event.target.value;
       if (state.caseId) scheduleProgressSave(700);
     }
+    if (event.target?.id === "verdict-textarea") {
+      const levelState = state.levelStates[state.currentLevel];
+      if (levelState) {
+        levelState.verdictText = event.target.value;
+        const countEl = document.querySelector(".verdict-count");
+        if (countEl) countEl.textContent = `${event.target.value.length} 字`;
+        if (state.caseId) scheduleProgressSave(700);
+      }
+    }
   });
 
   const fileInput = $("#file-input");
@@ -3993,6 +4675,43 @@ function bindEvents() {
       }
     });
   }
+
+  // 证据链拼图：拖拽排序
+  let chainDragFromPos = null;
+  document.addEventListener("dragstart", (event) => {
+    const card = event.target.closest?.(".chain-card");
+    if (!card) return;
+    const pos = Number(card.dataset.pos);
+    if (Number.isInteger(pos)) {
+      chainDragFromPos = pos;
+      event.dataTransfer.effectAllowed = "move";
+      try { event.dataTransfer.setData("text/plain", String(pos)); } catch (_) {}
+    }
+  });
+  document.addEventListener("dragover", (event) => {
+    if (event.target.closest?.(".chain-card")) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    }
+  });
+  document.addEventListener("drop", (event) => {
+    const card = event.target.closest?.(".chain-card");
+    if (!card || chainDragFromPos == null) return;
+    event.preventDefault();
+    const toPos = Number(card.dataset.pos);
+    if (Number.isInteger(toPos) && toPos !== chainDragFromPos) {
+      const levelState = state.levelStates[state.currentLevel];
+      if (levelState && Array.isArray(levelState.order)) {
+        const order = levelState.order.slice();
+        const [moved] = order.splice(chainDragFromPos, 1);
+        order.splice(toPos, 0, moved);
+        levelState.order = order;
+        render();
+      }
+    }
+    chainDragFromPos = null;
+  });
+  document.addEventListener("dragend", () => { chainDragFromPos = null; });
 
   let dragDepth = 0;
   const overlay = $("#drop-overlay");

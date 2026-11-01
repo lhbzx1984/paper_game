@@ -21,16 +21,21 @@ from paper_utils import (
     build_digest,
     extract_pdf_bytes,
     guess_title,
+    locate_quote,
     normalize_case,
+    normalize_for_match,
     normalize_levels,
+    quote_in_text,
     section_meta,
     verify_quotes,
 )
 from prompts import (
     CASE_SYSTEM,
     LEVELS_SYSTEM,
+    VERDICT_SCORE_SYSTEM,
     build_case_prompt,
     build_levels_prompt,
+    build_verdict_score_prompt,
 )
 import storage
 
@@ -468,6 +473,34 @@ def api_image_generate():
     return jsonify({"ok": True, **result})
 
 
+@app.post("/api/check_quote")
+def api_check_quote():
+    """检验玩家在论文中选中的文本是否包含正确的证据引文。"""
+    payload = request.get_json(silent=True) or {}
+    selection = str(payload.get("selection") or "").strip()
+    evidence_quote = str(payload.get("evidence_quote") or "").strip()
+    if not evidence_quote:
+        return api_error("缺少 evidence_quote", 400)
+    if not selection:
+        return jsonify({"ok": True, "match": False, "reason": "未选中文本"})
+    match = quote_in_text(evidence_quote, normalize_for_match(selection))
+    return jsonify({"ok": True, "match": match})
+
+
+@app.post("/api/locate_quote")
+def api_locate_quote():
+    """在论文原文中定位引文的字符偏移区间，用于高亮。"""
+    payload = request.get_json(silent=True) or {}
+    paper_text = str(payload.get("paper_text") or "")
+    quote = str(payload.get("quote") or "").strip()
+    if not quote or not paper_text:
+        return api_error("缺少 paper_text 或 quote", 400)
+    loc = locate_quote(paper_text, quote)
+    if loc is None:
+        return jsonify({"ok": True, "found": False})
+    return jsonify({"ok": True, "found": True, "start": loc[0], "end": loc[1]})
+
+
 @app.post("/api/config")
 def api_config():
     payload = request.get_json(silent=True) or {}
@@ -818,6 +851,78 @@ def api_generate():
     except Exception as exc:  # pragma: no cover - defensive
         app.logger.exception("generate failed")
         return api_error("生成关卡时发生意外错误", 500, str(exc))
+
+
+@app.post("/api/score_verdict")
+def api_score_verdict():
+    """对玩家的最终裁决进行 AI 评分。"""
+    payload = request.get_json(silent=True) or {}
+    case_file = payload.get("case_file")
+    verdict = str(payload.get("verdict") or "").strip()
+    if not isinstance(case_file, dict) or not case_file.get("paper"):
+        return api_error("缺少案件档案", 400)
+    if len(verdict) < 20:
+        return api_error("裁决内容太短，请认真填写后再提交", 400)
+
+    try:
+        status = public_status()
+        if status["mock"]:
+            # 模拟模式：给一个基于关键词的粗略评分
+            return jsonify({"ok": True, "score": _mock_verdict_score(verdict)})
+        if not status["real_configured"]:
+            return api_error("云端模型尚未配置，无法评分", 400)
+
+        raw = chat_json(
+            VERDICT_SCORE_SYSTEM,
+            build_verdict_score_prompt(case_file, verdict),
+            max_tokens=1200,
+            temperature=0.3,
+        )
+        scores = raw.get("scores") if isinstance(raw.get("scores"), dict) else {}
+        total = raw.get("total")
+        if not isinstance(total, (int, float)):
+            total = sum(int(scores.get(k, 0) or 0) for k in ("contribution", "credible_claim", "doubtful_claim", "reproduction_detail"))
+        total = max(0, min(100, int(total)))
+        return jsonify(
+            {
+                "ok": True,
+                "score": {
+                    "scores": {
+                        "contribution": int(scores.get("contribution", 0) or 0),
+                        "credible_claim": int(scores.get("credible_claim", 0) or 0),
+                        "doubtful_claim": int(scores.get("doubtful_claim", 0) or 0),
+                        "reproduction_detail": int(scores.get("reproduction_detail", 0) or 0),
+                    },
+                    "total": total,
+                    "feedback": str(raw.get("feedback") or "").strip(),
+                },
+            }
+        )
+    except LLMError as exc:
+        return api_error(exc.message, 502, exc.detail)
+    except Exception as exc:  # pragma: no cover - defensive
+        app.logger.exception("score_verdict failed")
+        return api_error("评分时发生意外错误", 500, str(exc))
+
+
+def _mock_verdict_score(verdict: str) -> dict:
+    """模拟模式下的粗略裁决评分，不依赖 LLM。"""
+    v = verdict.lower()
+    contribution = 20 if any(w in v for w in ("sparsedrop", "跨度", "dropout", "低资源")) else 10
+    credible = 20 if any(w in v for w in ("2.4", "4.1", "宏平均", "macro", "f1", "显著")) else 8
+    doubtful = 20 if any(w in v for w in ("局限", "不显著", "全量", "0.6", "外推", "风险")) else 8
+    repro = 20 if any(w in v for w in ("0.1", "0.15", "bert", "2-5", "2, 3, 4, 5")) else 8
+    total = min(100, contribution + credible + doubtful + repro)
+    return {
+        "scores": {
+            "contribution": contribution,
+            "credible_claim": credible,
+            "doubtful_claim": doubtful,
+            "reproduction_detail": repro,
+        },
+        "total": total,
+        "feedback": "（模拟模式）你的裁决已收到。配置真实云端模型后将获得基于论文证据的详细评分与反馈。",
+    }
 
 
 @app.errorhandler(RequestEntityTooLarge)
